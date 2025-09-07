@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>即時翻譯系統</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <button class="settings-toggle" id="settingsToggle">⚙️ 設定</button>
+    
+    <div class="container" id="container">
+        <div class="header" id="header">
+            <h1>🗣️ 即時翻譯系統</h1>
+            <p>Web Speech API + GPT-4o-mini 驅動</p>
+        </div>
+        
+        <div class="main-content" id="mainContent">
+            <div class="api-config" id="apiConfig">
+                <label for="apiKey">OpenAI API Key:</label>
+                <input type="password" id="apiKey" placeholder="請輸入您的 OpenAI API Key">
+                
+                <div class="noise-config">
+                    <h4>🎤 語音優化</h4>
+                    <div class="setting-item">
+                        <label>
+                            <input type="checkbox" id="advancedNoiseSuppression" checked>
+                            噪音抑制 (適用於吵雜環境)
+                        </label>
+                    </div>
+                    
+                    <div class="setting-item">
+                        <label for="confidenceThreshold">識別敏感度:</label>
+                        <div class="slider-container">
+                            <input type="range" id="confidenceThreshold" min="0.3" max="0.8" step="0.1" value="0.5">
+                            <span id="confidenceValue">中等</span>
+                        </div>
+                        <small>左邊 = 更敏感，右邊 = 更準確</small>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="controls" id="controls">
+                <div class="language-selector">
+                    <label>🎯 語音識別:</label>
+                    <select id="sourceLanguage">
+                        <option value="auto">🔍 自動偵測</option>
+                        <option value="zh-TW">繁體中文</option>
+                        <option value="en-US">English</option>
+                    </select>
+                </div>
+                
+                <div class="language-selector">
+                    <label>🌐 翻譯目標:</label>
+                    <select id="targetLanguage">
+                        <option value="繁體中文">繁體中文</option>
+                        <option value="English">English</option>
+                    </select>
+                </div>
+                
+                <button id="recordBtn" class="record-btn">🔴 會議錄音中</button>
+                <button id="presentationBtn" class="record-btn" style="background: linear-gradient(135deg, #17a2b8, #138496);">📺 簡報模式</button>
+            </div>
+            
+            <div class="transcript-container" id="transcriptContainer">
+                <div class="transcript-header">
+                    <h2>📝 會議實時字幕</h2>
+                    <div class="controls-mini">
+                        <button id="clearBtn" class="clear-btn">🗑️ 清除</button>
+                        <button id="exitPresentationBtn" class="clear-btn" style="background: #17a2b8; display: none;">🚪 退出簡報</button>
+                        <span id="wordCount" class="word-count">字數: 0</span>
+                    </div>
+                </div>
+                
+                <div class="transcript-display" id="transcriptDisplay">
+                    <div class="transcript-item start-message">
+                        <div class="timestamp">開始時間</div>
+                        <div class="content">
+                            <div class="source-text">會議開始，正在等待語音輸入...</div>
+                            <div class="translated-text">Meeting started, waiting for voice input...</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="presentation-pane original-pane" id="originalPane" style="display: none;">
+                    <h3>🎯 原文</h3>
+                    <div class="presentation-content" id="originalContent">
+                        <div class="text-wrapper">等待語音輸入...</div>
+                    </div>
+                </div>
+                
+                <div class="presentation-pane translated-pane" id="translatedPane" style="display: none;">
+                    <h3>🌐 翻譯</h3>
+                    <div class="presentation-content" id="translatedContent">
+                        <div class="text-wrapper">等待翻譯結果...</div>
+                    </div>
+                </div>
+                
+                <div class="current-speaking" id="currentSpeaking">
+                    <div class="live-indicator">🔴 LIVE</div>
+                    <div class="current-text" id="currentText"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>
