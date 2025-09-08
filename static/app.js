@@ -19,13 +19,14 @@ class RealTimeTranslator {
         
         // 語音識別重啟保護和狀態管理
         this.recognitionRetryCount = 0;
-        this.maxRecognitionRetries = 3; // 減少重試次數避免過度重啟
-        this.recognitionRestartDelay = 200; // 會議環境需要快速重啟
+        this.maxRecognitionRetries = 999; // 會議模式需要無限重試保持連續
+        this.recognitionRestartDelay = 100; // 更快速重啟，減少斷線時間
         this.isRecognitionActive = false;
         this.lastSpeechTime = 0;
         this.silenceTimeout = null;
         this.recognitionStartTime = 0;
         this.meetingKeepAlive = null;
+        this.recognitionKeepAliveInterval = null; // 語音識別保活定時器
         
         this.initElements();
         this.setupNoiseControlListeners();
@@ -196,11 +197,11 @@ class RealTimeTranslator {
         
         this.silenceTimeout = setTimeout(() => {
             if (this.continuousMode && !this.isRecognitionActive) {
-                console.log('靜音超時，準備重啟語音識別');
+                console.log('🔇 靜音超時，立即重啟語音識別保持連續');
                 this.recognitionRetryCount = 0; // 重置重試計數
                 this.startRecognition();
             }
-        }, 3000); // 3秒靜音後重啟，適合會議快節奏
+        }, 1000); // 1秒靜音後立即重啟，最大化連續性
     }
 
     trackSpeechActivity() {
@@ -653,7 +654,7 @@ class RealTimeTranslator {
         this.recognition.onend = () => {
             this.isRecognitionActive = false;
             const sessionDuration = Date.now() - this.recognitionStartTime;
-            console.log(`語音識別結束，持續時間: ${sessionDuration}ms`);
+            console.log(`🎤 語音識別結束，持續時間: ${sessionDuration}ms`);
             
             if (!this.continuousMode) {
                 this.isRecording = false;
@@ -661,26 +662,18 @@ class RealTimeTranslator {
                 return;
             }
             
-            // 如果會話很短（少於1秒），可能是技術問題，需要重啟
-            // 如果有最近的語音活動（5秒內），也需要重啟以保持連續性
-            const needRestart = sessionDuration < 1000 || 
-                              (Date.now() - this.lastSpeechTime < 5000);
+            // 會議模式：立即重啟，保持麥克風持續開啟
+            console.log('🔄 會議模式：立即重啟語音識別以保持連續性');
             
-            if (needRestart && this.recognitionRetryCount < this.maxRecognitionRetries) {
-                this.recognitionRetryCount++;
-                const delay = Math.min(this.recognitionRestartDelay * this.recognitionRetryCount, 1500);
-                console.log(`計劃在 ${delay}ms 後重啟語音識別 (重試 ${this.recognitionRetryCount}/${this.maxRecognitionRetries})`);
-                
-                setTimeout(() => {
-                    if (this.continuousMode) {
-                        this.startRecognition();
-                    }
-                }, delay);
-            } else {
-                console.log('語音識別自然結束或達到重試限制');
-                // 設置較長的靜音超時，如果用戶再次說話會重啟
-                this.setupSilenceTimeout();
-            }
+            // 重置重試計數器（每次自然結束都重置，避免累積）
+            this.recognitionRetryCount = 0;
+            
+            // 立即重啟，最小化麥克風關閉時間
+            setTimeout(() => {
+                if (this.continuousMode && !this.isRecognitionActive) {
+                    this.startRecognition();
+                }
+            }, this.recognitionRestartDelay); // 100ms 快速重啟
         };
 
         this.recognition.onerror = (event) => {
@@ -689,16 +682,10 @@ class RealTimeTranslator {
             // 根據錯誤類型採取不同處理策略
             const errorHandlers = {
                 'no-speech': () => {
-                    console.log('未檢測到語音');
-                    // 會議環境需要保持活躍，快速重啟或設置短超時
+                    console.log('🔇 未檢測到語音，立即重啟保持連續');
+                    // 會議環境：立即重啟，不要等待
                     if (this.continuousMode) {
-                        // 如果最近有語音活動，立即重啟
-                        if (Date.now() - this.lastSpeechTime < 8000) {
-                            setTimeout(() => this.startRecognition(), 500);
-                        } else {
-                            // 否則設置短超時
-                            this.setupSilenceTimeout();
-                        }
+                        setTimeout(() => this.startRecognition(), 200);
                     }
                 },
                 'audio-capture': () => {
@@ -1075,6 +1062,43 @@ class RealTimeTranslator {
         
         this.continuousMode = true;
         this.startRecognition();
+        
+        // 啟動主動保活機制，確保麥克風持續工作
+        this.startRecognitionKeepAlive();
+    }
+
+    // 主動保活機制 - 確保麥克風持續工作
+    startRecognitionKeepAlive() {
+        // 清除現有的保活定時器
+        if (this.recognitionKeepAliveInterval) {
+            clearInterval(this.recognitionKeepAliveInterval);
+        }
+        
+        // 每隔5秒檢查語音識別狀態
+        this.recognitionKeepAliveInterval = setInterval(() => {
+            if (this.continuousMode && !this.isRecognitionActive) {
+                console.log('🔄 保活檢查：語音識別已停止，立即重啟');
+                this.startRecognition();
+            } else if (this.continuousMode && this.isRecognitionActive) {
+                // 檢查是否長時間沒有重啟（超過60秒）
+                const timeSinceStart = Date.now() - this.recognitionStartTime;
+                if (timeSinceStart > 60000) {
+                    console.log('🔄 保活檢查：強制重啟以保持最佳狀態');
+                    this.recognition.stop(); // 觸發 onend 事件，自動重啟
+                }
+            }
+        }, 5000); // 每5秒檢查一次
+        
+        console.log('🎤 語音識別保活機制已啟動');
+    }
+
+    // 停止保活機制
+    stopRecognitionKeepAlive() {
+        if (this.recognitionKeepAliveInterval) {
+            clearInterval(this.recognitionKeepAliveInterval);
+            this.recognitionKeepAliveInterval = null;
+            console.log('🔇 語音識別保活機制已停止');
+        }
     }
 
     stopContinuousRecording() {
@@ -1090,6 +1114,9 @@ class RealTimeTranslator {
         if (this.recognition) {
             this.recognition.stop();
         }
+        
+        // 停止語音識別保活機制
+        this.stopRecognitionKeepAlive();
         
         // 重置重試狀態
         this.recognitionRetryCount = 0;
