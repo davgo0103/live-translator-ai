@@ -28,6 +28,10 @@ class RealTimeTranslator {
         this.meetingKeepAlive = null;
         this.recognitionKeepAliveInterval = null; // 語音識別保活定時器
         
+        // 句子邊界檢測相關
+        this.pendingOriginalText = ''; // 待處理的原文
+        this.pendingTranslationText = ''; // 待處理的翻譯文字
+        
         this.initElements();
         this.setupNoiseControlListeners();
         this.initializeConfidenceDisplay();
@@ -1122,6 +1126,10 @@ class RealTimeTranslator {
         this.recognitionRetryCount = 0;
         this.lastSpeechTime = 0;
         
+        // 清除句子邊界檢測狀態
+        this.pendingOriginalText = '';
+        this.pendingTranslationText = '';
+        
         this.isRecording = false;
         this.updateUI();
         this.updateStatus('source', 'ready', '已停止');
@@ -1431,8 +1439,50 @@ class RealTimeTranslator {
         }
     }
 
+    // 檢測句子邊界 - 支援中英文標點
+    detectSentenceBoundaries(text) {
+        // 中英文句子結束標點符號
+        const sentenceEndMarkers = /([.!?。！？；;][\s]*)/g;
+        
+        let matches = [];
+        let match;
+        
+        // 找到所有句子邊界位置
+        while ((match = sentenceEndMarkers.exec(text)) !== null) {
+            matches.push({
+                index: match.index + match[0].length,
+                marker: match[1]
+            });
+        }
+        
+        return matches;
+    }
+
+    // 拆分文字為完整句子和剩餘部分
+    splitTextAtSentenceBoundary(text) {
+        const boundaries = this.detectSentenceBoundaries(text);
+        
+        if (boundaries.length === 0) {
+            // 沒有發現句子邊界，全部作為剩餘部分
+            return {
+                completedSentences: '',
+                remainingText: text.trim()
+            };
+        }
+        
+        // 取最後一個句子邊界作為分割點
+        const lastBoundary = boundaries[boundaries.length - 1];
+        const completedSentences = text.substring(0, lastBoundary.index).trim();
+        const remainingText = text.substring(lastBoundary.index).trim();
+        
+        return {
+            completedSentences,
+            remainingText
+        };
+    }
+
     handleIncrementalTranslation(interimText) {
-        // 處理增量翻譯
+        // 處理增量翻譯 - 支援句子邊界檢測
         if (interimText === this.lastInterimText) {
             return; // 文字沒有變化，不需要重新翻譯
         }
@@ -1442,21 +1492,71 @@ class RealTimeTranslator {
             clearTimeout(this.translationUpdateTimer);
         }
         
-        // 如果文字有顯著變化，觸發增量翻譯
-        const fullText = this.currentTranslationText + ' ' + interimText;
+        // 累積當前的待處理文字
+        const fullPendingText = (this.pendingOriginalText + ' ' + interimText).trim();
+        console.log(`📝 累積的待處理文字: "${fullPendingText}"`);
         
-        // 智能觸發增量翻譯
-        const shouldTranslate = this.shouldTriggerIncrementalTranslation(interimText);
+        // 檢測句子邊界
+        const { completedSentences, remainingText } = this.splitTextAtSentenceBoundary(fullPendingText);
         
-        if (shouldTranslate) {
-            const delay = interimText.length > 10 ? 300 : 600; // 較長文字更快翻譯
-            this.translationUpdateTimer = setTimeout(() => {
-                console.log(`增量翻譯 (${interimText.length}字): "${interimText}"`);
-                this.translateIncrementalText(fullText.trim(), interimText);
-            }, delay);
+        // 如果發現完整句子，立即處理
+        if (completedSentences) {
+            console.log(`✅ 檢測到完整句子: "${completedSentences}"`);
+            console.log(`⏳ 剩餘文字: "${remainingText}"`);
+            
+            // 將完整句子轉為正式翻譯記錄
+            this.processCompletedSentence(completedSentences);
+            
+            // 更新待處理文字為剩餘部分
+            this.pendingOriginalText = remainingText;
+            
+            // 對剩餘部分進行增量翻譯
+            if (remainingText.trim()) {
+                this.performIncrementalTranslation(remainingText);
+            } else {
+                // 如果沒有剩餘文字，清除增量翻譯狀態
+                this.currentIncrementalTranslation = '';
+                this.updateInterimTranslationContent('');
+            }
+        } else {
+            // 沒有完整句子，更新待處理文字並進行增量翻譯
+            this.pendingOriginalText = fullPendingText;
+            this.performIncrementalTranslation(fullPendingText);
         }
         
         this.lastInterimText = interimText;
+    }
+
+    // 處理完整句子 - 將其轉為正式翻譯記錄
+    processCompletedSentence(completedSentences) {
+        console.log(`🎯 處理完整句子: "${completedSentences}"`);
+        
+        // 產生新的轉錄項目ID
+        const transcriptId = Date.now() + '-completed';
+        
+        // 立即添加到轉錄歷史
+        this.addTranscriptItem(completedSentences, transcriptId);
+        
+        // 觸發正式翻譯
+        this.addPunctuationAndTranslate(completedSentences, transcriptId);
+        
+        console.log(`📋 完整句子已加入正式記錄，ID: ${transcriptId}`);
+    }
+
+    // 執行增量翻譯
+    performIncrementalTranslation(text) {
+        // 智能觸發增量翻譯
+        const shouldTranslate = this.shouldTriggerIncrementalTranslation(text);
+        
+        if (shouldTranslate) {
+            const delay = text.length > 10 ? 300 : 600; // 較長文字更快翻譯
+            this.translationUpdateTimer = setTimeout(() => {
+                console.log(`🔄 增量翻譯 (${text.length}字): "${text}"`);
+                this.translateIncrementalText(text, text); // 直接翻譯剩餘文字
+            }, delay);
+        } else {
+            console.log(`⏸️ 文字太短，暫不翻譯: "${text}"`);
+        }
     }
 
     shouldTriggerIncrementalTranslation(interimText) {
@@ -1603,6 +1703,11 @@ class RealTimeTranslator {
         
         // 重置狀態
         this.isCompletingTranslation = false;
+        
+        // 清除句子邊界檢測的待處理狀態
+        this.pendingOriginalText = '';
+        this.pendingTranslationText = '';
+        console.log('🧹 句子邊界檢測狀態已清理');
         
         // 清理當前顯示中的增量翻譯標記
         const currentTextContent = this.currentText.innerHTML;
