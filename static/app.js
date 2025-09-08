@@ -1439,6 +1439,128 @@ class RealTimeTranslator {
         }
     }
 
+    // 智能合併文字，避免重複片段
+    smartMergeText(existingText, newText) {
+        if (!existingText || !existingText.trim()) {
+            return newText.trim();
+        }
+        
+        if (!newText || !newText.trim()) {
+            return existingText.trim();
+        }
+        
+        const existing = existingText.trim();
+        const incoming = newText.trim();
+        
+        console.log(`🔍 合併文字 - 現有: "${existing}"`);
+        console.log(`🔍 合併文字 - 新增: "${incoming}"`);
+        
+        // 檢查新文字是否完全包含在現有文字中
+        if (existing.includes(incoming)) {
+            console.log(`🔄 新文字已包含在現有文字中，保持現有文字`);
+            return existing;
+        }
+        
+        // 檢查現有文字是否完全包含在新文字中
+        if (incoming.includes(existing)) {
+            console.log(`🔄 現有文字已包含在新文字中，使用新文字`);
+            return incoming;
+        }
+        
+        // 查找重疊部分 - 從現有文字的末尾開始
+        let maxOverlap = 0;
+        let overlapLength = 0;
+        const minOverlapLength = Math.min(3, Math.min(existing.length, incoming.length) / 2);
+        
+        // 從最大可能的重疊開始檢查
+        for (let i = minOverlapLength; i <= Math.min(existing.length, incoming.length); i++) {
+            const existingSuffix = existing.slice(-i);
+            const incomingPrefix = incoming.slice(0, i);
+            
+            if (existingSuffix === incomingPrefix) {
+                overlapLength = i;
+                maxOverlap = i;
+            }
+        }
+        
+        if (overlapLength > 0) {
+            // 找到重疊，合併時去除重複部分
+            const merged = existing + incoming.slice(overlapLength);
+            console.log(`✅ 發現重疊 ${overlapLength} 字符，合併結果: "${merged}"`);
+            return merged;
+        } else {
+            // 沒有重疊，直接連接
+            const merged = existing + ' ' + incoming;
+            console.log(`➕ 無重疊，直接連接: "${merged}"`);
+            return merged;
+        }
+    }
+
+    // 翻譯結果去重 - 針對翻譯內容的智能去重
+    deduplicateTranslation(existingTranslation, newTranslation) {
+        if (!existingTranslation || !existingTranslation.trim()) {
+            return newTranslation ? newTranslation.trim() : '';
+        }
+        
+        if (!newTranslation || !newTranslation.trim()) {
+            return existingTranslation.trim();
+        }
+        
+        const existing = existingTranslation.trim();
+        const incoming = newTranslation.trim();
+        
+        console.log(`🔍 翻譯去重 - 現有: "${existing}"`);
+        console.log(`🔍 翻譯去重 - 新的: "${incoming}"`);
+        
+        // 如果新翻譯是現有翻譯的一部分，保持現有的
+        if (existing.includes(incoming) && existing.length > incoming.length) {
+            console.log(`🔄 新翻譯已包含在現有翻譯中，保持現有翻譯`);
+            return existing;
+        }
+        
+        // 如果現有翻譯是新翻譯的一部分，使用新翻譯
+        if (incoming.includes(existing) && incoming.length > existing.length) {
+            console.log(`🔄 現有翻譯已包含在新翻譯中，使用新翻譯`);
+            return incoming;
+        }
+        
+        // 檢查詞彙級別的重複（針對翻譯內容特別優化）
+        const existingWords = existing.split(/[\s\u3000]+/).filter(w => w.length > 0);
+        const incomingWords = incoming.split(/[\s\u3000]+/).filter(w => w.length > 0);
+        
+        // 如果新翻譯只是重複了現有翻譯的最後幾個詞
+        if (existingWords.length >= 3 && incomingWords.length >= 3) {
+            const lastWords = existingWords.slice(-Math.min(3, existingWords.length));
+            const firstWords = incomingWords.slice(0, Math.min(3, incomingWords.length));
+            
+            const overlap = lastWords.filter((word, index) => firstWords[index] === word).length;
+            
+            if (overlap >= 2) { // 有2個以上重複詞彙
+                // 合併時去除重複部分
+                const uniqueIncomingWords = incomingWords.slice(overlap);
+                const merged = existingWords.concat(uniqueIncomingWords).join(' ');
+                console.log(`✅ 檢測到詞彙重複，合併結果: "${merged}"`);
+                return merged;
+            }
+        }
+        
+        // 如果完全相同，返回其中一個
+        if (existing === incoming) {
+            console.log(`🔄 翻譯內容完全相同，保持現有`);
+            return existing;
+        }
+        
+        // 檢查是否是簡單的擴展（新內容在末尾添加）
+        if (incoming.startsWith(existing)) {
+            console.log(`➕ 新翻譯是現有翻譯的擴展，使用新翻譯`);
+            return incoming;
+        }
+        
+        // 其他情況，保持新的翻譯（通常是改進的結果）
+        console.log(`🔄 使用新翻譯替換現有翻譯`);
+        return incoming;
+    }
+
     // 檢測句子邊界 - 支援中英文標點
     detectSentenceBoundaries(text) {
         // 中英文句子結束標點符號
@@ -1492,8 +1614,8 @@ class RealTimeTranslator {
             clearTimeout(this.translationUpdateTimer);
         }
         
-        // 累積當前的待處理文字
-        const fullPendingText = (this.pendingOriginalText + ' ' + interimText).trim();
+        // 智能合併文字，避免重複
+        const fullPendingText = this.smartMergeText(this.pendingOriginalText, interimText);
         console.log(`📝 累積的待處理文字: "${fullPendingText}"`);
         
         // 檢測句子邊界
@@ -1670,12 +1792,15 @@ class RealTimeTranslator {
         // 清理增量翻譯文字中的換行符號
         const cleanTranslatedText = translatedText ? translatedText.replace(/\n+/g, ' ').replace(/\s+/g, ' ') : '';
         
+        // 智能合併翻譯結果，避免重複
+        const deduplicatedTranslation = this.deduplicateTranslation(this.currentIncrementalTranslation, cleanTranslatedText);
+        
         // 儲存增量翻譯狀態
-        this.currentIncrementalTranslation = cleanTranslatedText;
+        this.currentIncrementalTranslation = deduplicatedTranslation;
         
         // 優先使用動態更新，如果失敗則使用完整更新
         if (this.isPresentationMode) {
-            this.updateInterimTranslationContent(cleanTranslatedText);
+            this.updateInterimTranslationContent(deduplicatedTranslation);
         } else {
             // 立即更新簡報模式的連續文字流顯示
             this.updatePresentationLiveText('', '');
