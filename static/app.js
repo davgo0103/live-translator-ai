@@ -6,7 +6,6 @@ class RealTimeTranslator {
         this.continuousMode = true;
         this.lastTranslationTime = 0;
         this.recognitionTimeout = null;
-        this.translationQueue = [];
         this.transcriptHistory = [];
         this.currentTranscriptId = 0;
         this.totalWordCount = 0;
@@ -48,15 +47,6 @@ class RealTimeTranslator {
     }
 
     // XSS防護：安全文本清理函數
-    sanitizeText(text) {
-        if (typeof text !== 'string') return '';
-        
-        // 移除所有HTML標籤，只保留純文本
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
-
     // 安全地設置HTML內容，允許基本格式化但防止XSS
     safeSetHTML(element, content) {
         if (!element) return;
@@ -191,21 +181,6 @@ class RealTimeTranslator {
         localStorage.removeItem('openai_api_key');
     }
 
-    setupSilenceTimeout() {
-        // 設置靜音超時，允許長時間靜音後的智慧重啟
-        if (this.silenceTimeout) {
-            clearTimeout(this.silenceTimeout);
-        }
-        
-        this.silenceTimeout = setTimeout(() => {
-            if (this.continuousMode && !this.isRecognitionActive) {
-                console.log('🔇 靜音超時，立即重啟語音識別保持連續');
-                this.recognitionRetryCount = 0; // 重置重試計數
-                this.startRecognition();
-            }
-        }, 1000); // 1秒靜音後立即重啟，最大化連續性
-    }
-
     trackSpeechActivity() {
         // 記錄語音活動時間
         this.lastSpeechTime = Date.now();
@@ -303,35 +278,6 @@ class RealTimeTranslator {
         }
     }
 
-    // 將最終翻譯添加到文字流中 - 避免重複添加
-    addFinalTranslationToFlow(finalText) {
-        if (finalText && finalText.trim() && this.isPresentationMode) {
-            console.log('準備添加最終翻譯到文字流:', finalText);
-            
-            // 檢查是否已經添加過這個翻譯，避免重複
-            const trimmedText = finalText.trim();
-            const lastPart = this.currentTranslatedText.slice(-trimmedText.length - 5);
-            
-            if (!lastPart.includes(trimmedText)) {
-                // 只有在沒有重複時才添加
-                this.currentTranslatedText += trimmedText + ' ';
-                console.log('翻譯已添加到文字流');
-            } else {
-                console.log('翻譯已存在，跳過添加避免重複');
-            }
-            
-            // 管理文字長度
-            this.managePresentationTextLength();
-            
-            // 更新顯示
-            if (this.translatedWrapper) {
-                this.setPresentationHTML(this.translatedWrapper, this.currentTranslatedText);
-            }
-            
-            this.ensureContentVisible();
-        }
-    }
-
     // 多語言支援：根據目標語言返回適當的狀態文字
     getStatusText(key) {
         const targetLang = this.targetLanguage ? this.targetLanguage.value : '繁體中文';
@@ -358,48 +304,6 @@ class RealTimeTranslator {
         };
         
         return texts[targetLang] && texts[targetLang][key] ? texts[targetLang][key] : texts['繁體中文'][key];
-    }
-
-    getEnvironmentSettings() {
-        const environment = this.noiseEnvironment.value;
-        
-        switch (environment) {
-            case 'quiet':
-                return {
-                    echoCancellation: false,
-                    noiseSuppression: false,
-                    autoGainControl: false,
-                    sampleRate: 44100
-                };
-            case 'normal':
-                return {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 48000
-                };
-            case 'noisy':
-                return {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 48000
-                };
-            case 'very-noisy':
-                return {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 48000
-                };
-            default:
-                return {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    autoGainControl: true,
-                    sampleRate: 48000
-                };
-        }
     }
 
     setupNoiseControlListeners() {
@@ -2139,23 +2043,6 @@ class RealTimeTranslator {
         this.updateSingleLineDisplay(displayOriginalText, displayTranslatedText);
     }
 
-    managePresentationTextLengthForSingleLine() {
-        // 針對單行顯示的文字長度管理 - 更積極地清理
-        const maxLength = 200; // 更短的長度限制，適合單行顯示
-        
-        if (this.currentOriginalText.length > maxLength) {
-            const cutPoint = this.findGoodCutPoint(this.currentOriginalText, maxLength * 0.6);
-            this.currentOriginalText = this.currentOriginalText.substring(cutPoint);
-            console.log('原文已自動清理以保持單行顯示');
-        }
-        
-        if (this.currentTranslatedText.length > maxLength) {
-            const cutPoint = this.findGoodCutPoint(this.currentTranslatedText, maxLength * 0.6);
-            this.currentTranslatedText = this.currentTranslatedText.substring(cutPoint);
-            console.log('翻譯已自動清理以保持單行顯示');
-        }
-    }
-
     updateSingleLineDisplay(originalText, translatedText) {
         // 更新單行顯示，並實現動態文字滾動效果
         // 對於簡報模式，使用專用的HTML設置函數來保持底色效果
@@ -2347,22 +2234,6 @@ class RealTimeTranslator {
                 behavior: 'smooth'
             });
         }
-    }
-
-    autoScrollToBottom(element) {
-        // 檢查是否需要滾動
-        setTimeout(() => {
-            if (element.scrollHeight > element.clientHeight) {
-                element.scrollTop = element.scrollHeight;
-            }
-        }, 100);
-    }
-
-    forceScrollToBottom(element) {
-        // 強制滾動到底部，用於簡報模式
-        if (!element) return;
-        
-        element.scrollTop = element.scrollHeight;
     }
 
     getInitialFontSize() {
