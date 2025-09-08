@@ -348,22 +348,24 @@ select:focus {
     line-height: 1.6;
     color: #e8e8e8;
     text-align: left;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     padding: 20px 40px;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    justify-content: flex-start;
     align-items: flex-start;
     word-wrap: break-word;
+    scroll-behavior: smooth;
 }
 
 .text-wrapper {
     width: 100%;
-    height: 100%;
+    min-height: 100%;
     display: block;
     line-height: 1.8;
     word-wrap: break-word;
-    overflow: hidden;
+    overflow-wrap: break-word;
 }
 
 
@@ -393,6 +395,26 @@ select:focus {
 .translated-pane .presentation-content {
     color: #4facfe;
     word-wrap: break-word;
+}
+
+/* 簡報模式滾動條樣式 */
+.presentation-content::-webkit-scrollbar {
+    width: 6px;
+}
+
+.presentation-content::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 3px;
+}
+
+.presentation-content::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 3px;
+    transition: all 0.3s ease;
+}
+
+.presentation-content::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.5);
 }
 
 .settings-toggle {
@@ -568,8 +590,12 @@ select:focus {
 }
 
 .interim-text {
-    color: #888;
+    color: #7dd3fc;
     font-style: italic;
+    background: rgba(125, 211, 252, 0.15);
+    padding: 2px 4px;
+    border-radius: 3px;
+    margin-left: 2px;
 }
 
 @keyframes fadeInUp {

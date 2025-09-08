@@ -17,10 +17,15 @@ class RealTimeTranslator {
         this.currentOriginalText = ''; // 當前原文累積文字
         this.currentTranslatedText = ''; // 當前翻譯累積文字
         
-        // 語音識別重啟保護
+        // 語音識別重啟保護和狀態管理
         this.recognitionRetryCount = 0;
-        this.maxRecognitionRetries = 5;
-        this.recognitionRestartDelay = 100;
+        this.maxRecognitionRetries = 3; // 減少重試次數避免過度重啟
+        this.recognitionRestartDelay = 200; // 會議環境需要快速重啟
+        this.isRecognitionActive = false;
+        this.lastSpeechTime = 0;
+        this.silenceTimeout = null;
+        this.recognitionStartTime = 0;
+        this.meetingKeepAlive = null;
         
         this.initElements();
         this.setupNoiseControlListeners();
@@ -28,6 +33,9 @@ class RealTimeTranslator {
         this.initSpeechRecognition();
         this.bindEvents();
         this.startContinuousRecording();
+        
+        // 測試樣式過濾器
+        this.testStyleFiltering();
     }
 
     // XSS防護：安全文本清理函數
@@ -56,8 +64,35 @@ class RealTimeTranslator {
                 (match, attrs) => {
                     // 只允許style屬性，並且只允許安全的樣式
                     const styleMatch = attrs.match(/style\s*=\s*["']([^"']*)["']/i);
-                    if (styleMatch && /^(opacity:\s*[\d.]+;?\s*|font-style:\s*italic;?\s*)*$/.test(styleMatch[1])) {
-                        return `<span style="${styleMatch[1]}">`;
+                    if (styleMatch) {
+                        // 檢查每個樣式屬性是否安全
+                        const styles = styleMatch[1].split(';').map(s => s.trim()).filter(s => s);
+                        const allowedStyles = [];
+                        
+                        for (const style of styles) {
+                            // 簡化的樣式匹配
+                            if (style.startsWith('opacity:') ||
+                                style.startsWith('font-style: italic') ||
+                                style.startsWith('color: #') ||
+                                style.startsWith('background: rgba') ||
+                                style.startsWith('padding: ') ||
+                                style.startsWith('border-radius: ') ||
+                                style.startsWith('margin-left: ') ||
+                                style.startsWith('animation: ')) {
+                                allowedStyles.push(style);
+                                console.log(`允許樣式: ${style}`);
+                            } else {
+                                console.log(`拒絕樣式: ${style}`);
+                            }
+                        }
+                        
+                        if (allowedStyles.length > 0) {
+                            const finalStyle = `<span style="${allowedStyles.join('; ')}">`;
+                            console.log(`樣式過濾結果: "${styleMatch[1]}" -> "${finalStyle}"`);
+                            return finalStyle;
+                        } else {
+                            console.log(`樣式被過濾掉: "${styleMatch[1]}"`);
+                        }
                     }
                     return '<span>';
                 }
@@ -148,6 +183,91 @@ class RealTimeTranslator {
         sessionStorage.removeItem('api_key_timestamp');
         // 清除舊的localStorage存儲（向後兼容）
         localStorage.removeItem('openai_api_key');
+    }
+
+    setupSilenceTimeout() {
+        // 設置靜音超時，允許長時間靜音後的智慧重啟
+        if (this.silenceTimeout) {
+            clearTimeout(this.silenceTimeout);
+        }
+        
+        this.silenceTimeout = setTimeout(() => {
+            if (this.continuousMode && !this.isRecognitionActive) {
+                console.log('靜音超時，準備重啟語音識別');
+                this.recognitionRetryCount = 0; // 重置重試計數
+                this.startRecognition();
+            }
+        }, 3000); // 3秒靜音後重啟，適合會議快節奏
+    }
+
+    trackSpeechActivity() {
+        // 記錄語音活動時間
+        this.lastSpeechTime = Date.now();
+        
+        // 成功的語音識別後重置重試計數
+        if (this.recognitionRetryCount > 0) {
+            console.log('語音活動檢測到，重置重試計數');
+            this.recognitionRetryCount = 0;
+        }
+    }
+
+    // 調試函數 - 測試樣式過濾
+    testStyleFilter(styleString) {
+        const allowedStylePattern = /^(opacity:\s*[\d.]+;?\s*|font-style:\s*italic;?\s*|color:\s*[#\w\(\),\s.]+;?\s*|background:\s*rgba?\([^\)]+\);?\s*|padding:\s*[\dpx\s]+;?\s*|border-radius:\s*[\dpx\s]+;?\s*|margin-left:\s*[\dpx\s]+;?\s*|animation:\s*[\w\s]+;?\s*)*$/;
+        const result = allowedStylePattern.test(styleString);
+        console.log(`樣式測試: "${styleString}" -> ${result}`);
+        return result;
+    }
+
+    testStyleFiltering() {
+        console.log('=== 測試樣式過濾器 ===');
+        
+        // 測試我們實際使用的樣式字符串
+        const testStyles = [
+            'opacity: 0.8; font-style: italic; color: #4ade80; background: rgba(74, 222, 128, 0.15); padding: 0 4px; border-radius: 3px',
+            'opacity: 0.6; font-style: italic; color: #94a3b8; background: rgba(148, 163, 184, 0.1); padding: 0 4px; border-radius: 3px',
+            'opacity: 0.8; font-style: italic; color: #7dd3fc; background: rgba(125, 211, 252, 0.15); padding: 0 4px; border-radius: 3px'
+        ];
+        
+        testStyles.forEach((styleString, index) => {
+            console.log(`測試樣式 ${index + 1}: "${styleString}"`);
+            
+            // 測試safeSetHTML
+            const testElement1 = document.createElement('div');
+            const testHTML = `<span style="${styleString}">測試文字</span>`;
+            console.log(`原始HTML: ${testHTML}`);
+            this.safeSetHTML(testElement1, testHTML);
+            console.log(`safeSetHTML結果: ${testElement1.innerHTML}`);
+            
+            // 測試setPresentationHTML
+            const testElement2 = document.createElement('div');
+            this.setPresentationHTML(testElement2, testHTML);
+            console.log(`setPresentationHTML結果: ${testElement2.innerHTML}`);
+            console.log('---');
+        });
+        
+        console.log('=== 測試完成 ===');
+    }
+
+    // 專門用於簡報模式臨時翻譯的安全HTML設置
+    setPresentationHTML(element, content) {
+        if (!element) return;
+        
+        // 對於簡報模式的臨時翻譯，我們可以放寬限制，因為內容是我們控制的
+        // 只允許我們特定的span樣式模式
+        const allowedHTML = content.replace(
+            /<span style="([^"]*)">/g,
+            (match, style) => {
+                // 檢查是否是我們的臨時翻譯樣式
+                if (style.includes('background: rgba') && style.includes('border-radius: 3px')) {
+                    return match; // 保持原樣
+                }
+                return '<span>'; // 移除樣式
+            }
+        );
+        
+        element.innerHTML = allowedHTML;
+        console.log(`簡報HTML設置: ${allowedHTML}`);
     }
 
     getEnvironmentSettings() {
@@ -365,7 +485,12 @@ class RealTimeTranslator {
         // 優化語音識別設定 - 根據 Web Speech API 最佳實踐
         this.recognition.continuous = true;
         this.recognition.interimResults = true;
-        this.recognition.maxAlternatives = 5; // 更多候選結果提升準確度
+        this.recognition.maxAlternatives = 3; // 平衡準確度與性能
+        
+        // 設置較長的靜音超時以減少不必要的重啟
+        if ('grammars' in this.recognition) {
+            // 某些瀏覽器支援語法提示，但這裡我們保持通用
+        }
         
         // 針對簡報模式優化語音識別參數
         if (this.isPresentationMode) {
@@ -378,6 +503,8 @@ class RealTimeTranslator {
 
         this.recognition.onstart = () => {
             this.isRecording = true;
+            this.isRecognitionActive = true;
+            this.recognitionStartTime = Date.now();
             this.updateUI();
             console.log('語音識別已啟動');
             
@@ -387,28 +514,43 @@ class RealTimeTranslator {
             // 清空當前顯示的臨時文字
             this.safeSetHTML(this.currentText, '');
             
-            // 簡報模式不需要清空，保持連續文字流
+            // 清除任何現有的靜音超時
+            if (this.silenceTimeout) {
+                clearTimeout(this.silenceTimeout);
+                this.silenceTimeout = null;
+            }
         };
 
         this.recognition.onend = () => {
-            console.log('語音識別結束，重新啟動...');
-            if (this.continuousMode) {
-                if (this.recognitionRetryCount < this.maxRecognitionRetries) {
-                    this.recognitionRetryCount++;
-                    const delay = Math.min(this.recognitionRestartDelay * this.recognitionRetryCount, 2000);
-                    console.log(`語音識別重啟 (第${this.recognitionRetryCount}次，延遲${delay}ms)`);
-                    
-                    setTimeout(() => {
-                        this.startRecognition();
-                    }, delay);
-                } else {
-                    console.error('語音識別重試次數已達上限，停止自動重啟');
-                    this.stopContinuousRecording();
-                    alert('語音識別遇到問題，請檢查麥克風權限後重新開始');
-                }
-            } else {
+            this.isRecognitionActive = false;
+            const sessionDuration = Date.now() - this.recognitionStartTime;
+            console.log(`語音識別結束，持續時間: ${sessionDuration}ms`);
+            
+            if (!this.continuousMode) {
                 this.isRecording = false;
                 this.updateUI();
+                return;
+            }
+            
+            // 如果會話很短（少於1秒），可能是技術問題，需要重啟
+            // 如果有最近的語音活動（5秒內），也需要重啟以保持連續性
+            const needRestart = sessionDuration < 1000 || 
+                              (Date.now() - this.lastSpeechTime < 5000);
+            
+            if (needRestart && this.recognitionRetryCount < this.maxRecognitionRetries) {
+                this.recognitionRetryCount++;
+                const delay = Math.min(this.recognitionRestartDelay * this.recognitionRetryCount, 1500);
+                console.log(`計劃在 ${delay}ms 後重啟語音識別 (重試 ${this.recognitionRetryCount}/${this.maxRecognitionRetries})`);
+                
+                setTimeout(() => {
+                    if (this.continuousMode) {
+                        this.startRecognition();
+                    }
+                }, delay);
+            } else {
+                console.log('語音識別自然結束或達到重試限制');
+                // 設置較長的靜音超時，如果用戶再次說話會重啟
+                this.setupSilenceTimeout();
             }
         };
 
@@ -418,9 +560,16 @@ class RealTimeTranslator {
             // 根據錯誤類型採取不同處理策略
             const errorHandlers = {
                 'no-speech': () => {
-                    console.log('未檢測到語音，快速重啟...');
+                    console.log('未檢測到語音');
+                    // 會議環境需要保持活躍，快速重啟或設置短超時
                     if (this.continuousMode) {
-                        setTimeout(() => this.startRecognition(), 300);
+                        // 如果最近有語音活動，立即重啟
+                        if (Date.now() - this.lastSpeechTime < 8000) {
+                            setTimeout(() => this.startRecognition(), 500);
+                        } else {
+                            // 否則設置短超時
+                            this.setupSilenceTimeout();
+                        }
                     }
                 },
                 'audio-capture': () => {
@@ -466,6 +615,9 @@ class RealTimeTranslator {
         };
 
         this.recognition.onresult = (event) => {
+            // 記錄語音活動
+            this.trackSpeechActivity();
+            
             let interimTranscript = '';
             let finalTranscript = '';
 
@@ -712,26 +864,60 @@ class RealTimeTranslator {
 
     stopContinuousRecording() {
         this.continuousMode = false;
+        this.isRecognitionActive = false;
+        
+        // 清除所有超時和狀態
+        if (this.silenceTimeout) {
+            clearTimeout(this.silenceTimeout);
+            this.silenceTimeout = null;
+        }
+        
         if (this.recognition) {
             this.recognition.stop();
         }
+        
+        // 重置重試狀態
+        this.recognitionRetryCount = 0;
+        this.lastSpeechTime = 0;
+        
         this.isRecording = false;
         this.updateUI();
         this.updateStatus('source', 'ready', '已停止');
+        
+        console.log('會議模式已停止，所有狀態已清理');
     }
 
     startRecognition() {
         if (!this.recognition || !this.continuousMode) return;
         
+        // 避免重複啟動
+        if (this.isRecognitionActive) {
+            console.log('語音識別已在運行中，跳過重啟');
+            return;
+        }
+        
         try {
+            console.log('正在啟動語音識別...');
             this.recognition.start();
         } catch (error) {
-            console.log('Recognition already started or error:', error);
-            setTimeout(() => {
-                if (this.continuousMode) {
-                    this.startRecognition();
-                }
-            }, 1000);
+            console.log('語音識別啟動錯誤:', error.message);
+            
+            // 根據錯誤類型決定重試策略
+            if (error.name === 'InvalidStateError') {
+                console.log('識別器狀態錯誤，等待重試');
+                setTimeout(() => {
+                    if (this.continuousMode && !this.isRecognitionActive) {
+                        this.startRecognition();
+                    }
+                }, 2000);
+            } else {
+                // 其他錯誤，較短延遲後重試
+                setTimeout(() => {
+                    if (this.continuousMode && !this.isRecognitionActive) {
+                        this.startRecognition();
+                    }
+                }, 1000);
+            }
         }
     }
 
@@ -1098,7 +1284,7 @@ class RealTimeTranslator {
         
         // 在當前顯示區域顯示增量翻譯（用特殊樣式標記）
         const currentDisplay = this.currentText.innerHTML;
-        const incrementalHtml = `<span class="incremental-translation" style="color: #4facfe; font-style: italic; opacity: 0.8;">[${cleanTranslatedText}]</span>`;
+        const incrementalHtml = `<span class="incremental-translation" style="color: #4ade80; font-style: italic; opacity: 0.8; background: rgba(74, 222, 128, 0.15); padding: 2px 6px; border-radius: 3px; margin-left: 4px;">[${cleanTranslatedText}]</span>`;
         
         // 暫時顯示增量翻譯
         this.safeSetHTML(this.currentText, currentDisplay + ' ' + incrementalHtml);
@@ -1402,9 +1588,13 @@ class RealTimeTranslator {
             
             // 翻譯區域顯示即時翻譯或臨時文字
             if (this.currentIncrementalTranslation && this.currentIncrementalTranslation.trim()) {
-                displayTranslatedText += '<span style="opacity: 0.8; font-style: italic; color: #4ade80; background: rgba(74, 222, 128, 0.15); padding: 0 4px; border-radius: 3px;">' + this.currentIncrementalTranslation + '</span>';
+                const translationSpan = '<span style="opacity: 0.8; font-style: italic; color: #4ade80; background: rgba(74, 222, 128, 0.15); padding: 0 4px; border-radius: 3px;">' + this.currentIncrementalTranslation + '</span>';
+                console.log('簡報模式增量翻譯HTML:', translationSpan);
+                displayTranslatedText += translationSpan;
             } else {
-                displayTranslatedText += '<span style="opacity: 0.6; font-style: italic; color: #94a3b8;">翻譯中...</span>';
+                const waitingSpan = '<span style="opacity: 0.6; font-style: italic; color: #94a3b8; background: rgba(148, 163, 184, 0.1); padding: 0 4px; border-radius: 3px;">翻譯中...</span>';
+                console.log('簡報模式等待翻譯HTML:', waitingSpan);
+                displayTranslatedText += waitingSpan;
             }
         }
         
@@ -1437,11 +1627,20 @@ class RealTimeTranslator {
 
     updateSingleLineDisplay(originalText, translatedText) {
         // 更新單行顯示，並實現動態文字滾動效果
-        this.safeSetHTML(this.originalWrapper, originalText);
-        this.safeSetHTML(this.translatedWrapper, translatedText);
+        // 對於簡報模式，使用專用的HTML設置函數來保持底色效果
+        if (this.isPresentationMode) {
+            this.setPresentationHTML(this.originalWrapper, originalText);
+            this.setPresentationHTML(this.translatedWrapper, translatedText);
+        } else {
+            this.safeSetHTML(this.originalWrapper, originalText);
+            this.safeSetHTML(this.translatedWrapper, translatedText);
+        }
         
         // 為正在識別的文字添加打字機效果
         this.addTypingEffect();
+        
+        // 確保更新後的內容可見
+        this.ensureContentVisible();
     }
 
     addTypingEffect() {
@@ -1519,7 +1718,11 @@ class RealTimeTranslator {
         this.managePresentationTextLength();
         
         // 更新翻譯顯示，允許自然換行
-        this.safeSetHTML(this.translatedWrapper, this.currentTranslatedText);
+        if (this.isPresentationMode) {
+            this.setPresentationHTML(this.translatedWrapper, this.currentTranslatedText);
+        } else {
+            this.safeSetHTML(this.translatedWrapper, this.currentTranslatedText);
+        }
         
         console.log(`簡報模式翻譯更新: ID ${translationId}, 長度: ${this.currentTranslatedText.length}`);
     }
@@ -1552,33 +1755,59 @@ class RealTimeTranslator {
     updatePresentationHistory() {
         if (!this.originalWrapper || !this.translatedWrapper) return;
         
-        // 獲取最近的歷史記錄，用換行分隔
-        const recentHistory = this.transcriptHistory.slice(-this.presentationMaxItems);
-        
-        if (recentHistory.length === 0) {
+        // 簡報模式使用連續文字流，直接顯示當前累積的文字
+        if (this.currentOriginalText && this.currentOriginalText.trim()) {
+            this.safeSetHTML(this.originalWrapper, this.currentOriginalText);
+        } else {
             this.safeSetHTML(this.originalWrapper, '等待語音輸入...');
-            this.safeSetHTML(this.translatedWrapper, '等待翻譯結果...');
-            return;
         }
         
-        // 構建顯示內容，每句話一行
-        let originalLines = [];
-        let translatedLines = [];
+        if (this.currentTranslatedText && this.currentTranslatedText.trim()) {
+            if (this.isPresentationMode) {
+                this.setPresentationHTML(this.translatedWrapper, this.currentTranslatedText);
+            } else {
+                this.safeSetHTML(this.translatedWrapper, this.currentTranslatedText);
+            }
+        } else {
+            if (this.isPresentationMode) {
+                this.setPresentationHTML(this.translatedWrapper, '等待翻譯結果...');
+            } else {
+                this.safeSetHTML(this.translatedWrapper, '等待翻譯結果...');
+            }
+        }
         
-        recentHistory.forEach((item) => {
-            originalLines.push(item.sourceText || '');
-            translatedLines.push(item.translatedText || item.sourceText || '');
-        });
+        // 確保文字容器能正確顯示並自動滾動到最新內容
+        this.ensureContentVisible();
+    }
+
+    ensureContentVisible() {
+        if (!this.isPresentationMode) return;
         
-        // 更新顯示內容
-        this.safeSetHTML(this.originalWrapper, originalLines.join('<br>'));
-        this.safeSetHTML(this.translatedWrapper, translatedLines.join('<br>'));
-        
-        // 強制自動滾動到底部
+        // 確保原文和翻譯容器都能顯示最新內容
         setTimeout(() => {
-            this.forceScrollToBottom(this.originalContent);
-            this.forceScrollToBottom(this.translatedContent);
+            if (this.originalContent) {
+                this.smartScroll(this.originalContent);
+            }
+            if (this.translatedContent) {
+                this.smartScroll(this.translatedContent);
+            }
         }, 50);
+    }
+
+    smartScroll(container) {
+        if (!container) return;
+        
+        // 檢查內容是否超出容器高度
+        const containerHeight = container.clientHeight;
+        const contentHeight = container.scrollHeight;
+        
+        if (contentHeight > containerHeight) {
+            // 平滑滾動到底部
+            container.scrollTo({
+                top: contentHeight,
+                behavior: 'smooth'
+            });
+        }
     }
 
     autoScrollToBottom(element) {
@@ -1641,7 +1870,8 @@ class RealTimeTranslator {
         
         console.log(`字體大小調整為: ${this.currentFontSize}px`);
         
-        // 簡報模式不需要滾動，文字會自動管理長度
+        // 字體調整後確保內容可見
+        this.ensureContentVisible();
     }
 
     toggleControls() {
