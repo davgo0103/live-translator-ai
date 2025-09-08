@@ -278,19 +278,23 @@ class RealTimeTranslator {
             interimSpan.style.fontStyle = 'normal'; // 移除斜體樣式
             interimSpan.style.background = 'transparent'; // 移除背景色
             
-            // 短暫停後整合到文字流
+            // 增加延遲時間，讓用戶看到完整翻譯
             this.pendingTranslationTimeout = setTimeout(() => {
-                if (interimSpan.parentNode) {
+                if (interimSpan && interimSpan.parentNode) {
+                    // 只移除臨時元素，不手動添加到文字流（由 updateTranscriptTranslation 處理）
                     interimSpan.remove();
+                    console.log('臨時翻譯元素已移除:', finalText);
                 }
-                // 不直接添加到文字流，而是等待 updateTranscriptTranslation 統一處理
-                // this.addFinalTranslationToFlow(finalText);
                 this.isCompletingTranslation = false;
-                console.log('臨時翻譯已移除，等待統一更新:', finalText);
-            }, 100); // 減少延遲時間
+                // 清除臨時翻譯狀態
+                this.currentIncrementalTranslation = '';
+            }, 300); // 減少延遲時間
         } else if (interimSpan && (!finalText || !finalText.trim())) {
             // 如果沒有翻譯結果，直接移除臨時元素
-            interimSpan.remove();
+            if (interimSpan.parentNode) {
+                interimSpan.remove();
+            }
+            this.currentIncrementalTranslation = '';
             this.isCompletingTranslation = false;
         }
     }
@@ -1019,6 +1023,10 @@ class RealTimeTranslator {
             return;
         }
         
+        // 清理所有之前的狀態
+        this.clearIncrementalTranslation();
+        this.currentIncrementalTranslation = '';
+        
         this.continuousMode = true;
         this.startRecognition();
         
@@ -1100,6 +1108,9 @@ class RealTimeTranslator {
             console.log('語音識別已在運行中，跳過重啟');
             return;
         }
+        
+        // 清理之前的臨時翻譯狀態
+        this.currentIncrementalTranslation = '';
         
         try {
             console.log('正在啟動語音識別...');
@@ -1852,39 +1863,39 @@ class RealTimeTranslator {
                 const cleanOriginal = parsed.original ? parsed.original.replace(/\n+/g, ' ').replace(/\s+/g, ' ') : '';
                 const cleanTranslation = parsed.translation ? parsed.translation.replace(/\n+/g, ' ').replace(/\s+/g, ' ') : '';
                 
-                // 簡報模式：平滑完成臨時翻譯
-                if (this.isPresentationMode) {
-                    this.completeInterimTranslation(cleanTranslation);
-                }
-                
                 // 添加有標點符號的原文
                 this.addTranscriptItem(cleanOriginal);
                 // 更新翻譯
                 this.updateTranscriptTranslation(transcriptId, cleanTranslation);
+                
+                // 簡報模式：在正式更新後平滑完成臨時翻譯
+                if (this.isPresentationMode) {
+                    this.completeInterimTranslation(cleanTranslation);
+                }
             } catch (parseError) {
                 // 如果JSON解析失敗，使用原本邏輯
                 console.log('JSON解析失敗，使用備用方法');
+                
+                this.addTranscriptItem(text);
+                this.translateText(text, transcriptId);
                 
                 // 簡報模式：即使是備用方法也要平滑完成
                 if (this.isPresentationMode) {
                     this.completeInterimTranslation(''); // 沒有翻譯內容時傳入空字串
                 }
-                
-                this.addTranscriptItem(text);
-                this.translateText(text, transcriptId);
             }
 
         } catch (error) {
             console.error('處理錯誤:', error);
             
-            // 簡報模式：錯誤時也要平滑完成
-            if (this.isPresentationMode) {
-                this.completeInterimTranslation('');
-            }
-            
             // 錯誤時使用原本邏輯
             this.addTranscriptItem(text);
             this.updateTranscriptTranslation(transcriptId, `處理失敗: ${error.message}`);
+            
+            // 簡報模式：錯誤時也要清理臨時狀態
+            if (this.isPresentationMode) {
+                this.completeInterimTranslation('');
+            }
         }
     }
 
