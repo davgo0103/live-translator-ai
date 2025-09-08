@@ -34,6 +34,9 @@ class RealTimeTranslator {
         this.bindEvents();
         this.startContinuousRecording();
         
+        // 啟用 Wake Lock 防止整個網頁休眠
+        this.initializeWakeLock();
+        
         // 測試樣式過濾器
         this.testStyleFiltering();
     }
@@ -564,6 +567,10 @@ class RealTimeTranslator {
         this.currentConfidenceThreshold = 0.5;
         this.fastSpeechMode = false; // 快速語音模式標記
         
+        // Wake Lock API 相關 - 防止手機休眠
+        this.wakeLock = null;
+        this.wakeLockSupported = 'wakeLock' in navigator;
+        
         // 即時翻譯相關
         this.currentTranslationText = '';     // 當前正在翻譯的文字
         this.lastInterimText = '';            // 上次的臨時文字
@@ -802,6 +809,85 @@ class RealTimeTranslator {
         };
     }
 
+    // 初始化 Wake Lock - 防止整個網頁休眠
+    async initializeWakeLock() {
+        console.log('🌙 正在啟用全域螢幕保持喚醒功能...');
+        const success = await this.requestWakeLock();
+        if (success) {
+            console.log('✅ 全域螢幕保持喚醒已啟用 - 手機不會休眠');
+        } else {
+            console.log('⚠️ 無法立即啟用螢幕保持喚醒 - 等待用戶互動後啟用');
+            this.setupUserInteractionWakeLock();
+        }
+    }
+
+    // 設置用戶互動後啟用 Wake Lock
+    setupUserInteractionWakeLock() {
+        const enableWakeLockOnInteraction = async () => {
+            console.log('👆 檢測到用戶互動，嘗試啟用 Wake Lock...');
+            const success = await this.requestWakeLock();
+            if (success) {
+                console.log('✅ 用戶互動後成功啟用全域螢幕保持喚醒');
+                // 移除事件監聽器，避免重複執行
+                document.removeEventListener('click', enableWakeLockOnInteraction);
+                document.removeEventListener('keydown', enableWakeLockOnInteraction);
+                document.removeEventListener('touchstart', enableWakeLockOnInteraction);
+            }
+        };
+
+        // 監聽用戶互動事件
+        document.addEventListener('click', enableWakeLockOnInteraction, { once: true });
+        document.addEventListener('keydown', enableWakeLockOnInteraction, { once: true });
+        document.addEventListener('touchstart', enableWakeLockOnInteraction, { once: true });
+    }
+
+    // Wake Lock API 管理 - 防止手機休眠
+    async requestWakeLock() {
+        if (!this.wakeLockSupported) {
+            console.warn('此瀏覽器不支援 Wake Lock API，無法防止休眠');
+            return false;
+        }
+
+        try {
+            this.wakeLock = await navigator.wakeLock.request('screen');
+            console.log('✅ 螢幕保持喚醒已啟用 (簡報模式)');
+            
+            // 監聽 Wake Lock 釋放事件
+            this.wakeLock.addEventListener('release', () => {
+                console.log('⏰ Wake Lock 已釋放');
+            });
+            
+            return true;
+        } catch (err) {
+            console.warn('無法啟用螢幕保持喚醒:', err.message);
+            return false;
+        }
+    }
+
+    async releaseWakeLock() {
+        if (this.wakeLock && !this.wakeLock.released) {
+            try {
+                await this.wakeLock.release();
+                this.wakeLock = null;
+                console.log('🔒 螢幕保持喚醒已停用');
+                return true;
+            } catch (err) {
+                console.warn('釋放 Wake Lock 時發生錯誤:', err.message);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // 處理頁面可見性變化時的 Wake Lock 狀態 - 始終保持喚醒
+    async handleVisibilityChange() {
+        if (document.visibilityState === 'visible') {
+            // 頁面重新可見時，重新請求 Wake Lock (無論是否在簡報模式)
+            console.log('頁面重新可見，重新啟用全域 Wake Lock');
+            await this.requestWakeLock();
+        }
+    }
+
     bindEvents() {
         this.recordBtn.addEventListener('click', () => {
             this.toggleRecording();
@@ -936,12 +1022,16 @@ class RealTimeTranslator {
         }
 
         // 頁面卸載時的安全清理
-        window.addEventListener('beforeunload', () => {
+        window.addEventListener('beforeunload', async () => {
             // 在離開頁面時清除內存中的敏感數據
             if (this.apiKey) {
                 this.apiKey = '';
                 this.apiKeyInput.value = '';
             }
+            
+            // 釋放 Wake Lock
+            await this.releaseWakeLock();
+            console.log('頁面卸載：Wake Lock 已釋放');
         });
 
         // 頁面可見性改變時的處理
@@ -949,6 +1039,9 @@ class RealTimeTranslator {
             if (document.hidden) {
                 // 頁面被隱藏時，可以選擇清除敏感數據
                 console.log('頁面被隱藏，敏感數據已標記');
+            } else {
+                // 頁面重新可見時，處理 Wake Lock
+                this.handleVisibilityChange();
             }
         });
     }
@@ -1646,13 +1739,14 @@ class RealTimeTranslator {
         }
     }
 
-    enterPresentationMode() {
+    async enterPresentationMode() {
         if (!this.apiKey) {
             alert('請先設定 API Key 才能進入簡報模式');
             return;
         }
 
         this.isPresentationMode = true;
+        console.log('📺 進入簡報模式 (全域螢幕保持喚醒已啟用)');
         document.body.classList.add('presentation-mode');
         this.transcriptContainer.classList.add('presentation-mode');
         
@@ -1696,6 +1790,7 @@ class RealTimeTranslator {
 
     exitPresentationMode() {
         this.isPresentationMode = false;
+        console.log('🚪 退出簡報模式 (全域螢幕保持喚醒持續運作)');
         document.body.classList.remove('presentation-mode');
         this.transcriptContainer.classList.remove('presentation-mode');
         
