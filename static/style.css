@@ -350,7 +350,7 @@ select:focus {
     text-align: left;
     overflow-y: auto;
     overflow-x: hidden;
-    padding: 20px 40px;
+    padding: 20px 40px 50px 40px; /* 增加底部留白避免貼近邊框 */
     display: flex;
     flex-direction: column;
     justify-content: flex-start;
@@ -788,7 +788,7 @@ select:focus {
     }
     
     .presentation-content {
-        padding: 10px 15px !important;
+        padding: 10px 15px 40px 15px !important; /* 手機版底部留白 */
         font-size: 20px !important;
         line-height: 1.4 !important;
     }
@@ -839,7 +839,7 @@ select:focus {
 /* 小螢幕優化 (手機橫向或小平板) */
 @media (max-width: 480px) {
     .presentation-content {
-        padding: 8px 12px !important;
+        padding: 8px 12px 35px 12px !important; /* 小螢幕底部留白 */
         font-size: 18px !important;
         line-height: 1.3 !important;
     }
