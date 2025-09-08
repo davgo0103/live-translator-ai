@@ -278,7 +278,7 @@ class RealTimeTranslator {
         const interimSpan = this.translatedWrapper.querySelector('#interim-translation');
         if (interimSpan) {
             // 直接更新內容，保持樣式和位置
-            const newContent = translationText && translationText.trim() ? translationText : '翻譯中...';
+            const newContent = translationText && translationText.trim() ? translationText : this.getStatusText('translating');
             interimSpan.textContent = newContent;
             console.log('動態更新臨時翻譯:', newContent);
         } else {
@@ -326,6 +326,34 @@ class RealTimeTranslator {
             
             this.ensureContentVisible();
         }
+    }
+
+    // 多語言支援：根據目標語言返回適當的狀態文字
+    getStatusText(key) {
+        const targetLang = this.targetLanguage ? this.targetLanguage.value : '繁體中文';
+        
+        const texts = {
+            '繁體中文': {
+                translating: '翻譯中...',
+                waitingForTranslation: '等待翻譯結果...',
+                waitingForSpeech: '等待語音輸入...',
+                meetingStarted: '會議開始，正在等待語音輸入...',
+                meetingStartedEn: 'Meeting started, waiting for voice input...',
+                transcriptCleared: '字幕已清除，準備記錄新的會議內容...',
+                transcriptClearedEn: 'Transcript cleared, ready to record new meeting content...'
+            },
+            'English': {
+                translating: 'Translating...',
+                waitingForTranslation: 'Waiting for translation...',
+                waitingForSpeech: 'Waiting for speech input...',
+                meetingStarted: 'Meeting started, waiting for voice input...',
+                meetingStartedEn: '會議開始，正在等待語音輸入...',
+                transcriptCleared: 'Transcript cleared, ready to record new meeting content...',
+                transcriptClearedEn: '字幕已清除，準備記錄新的會議內容...'
+            }
+        };
+        
+        return texts[targetLang] && texts[targetLang][key] ? texts[targetLang][key] : texts['繁體中文'][key];
     }
 
     getEnvironmentSettings() {
@@ -1001,7 +1029,7 @@ class RealTimeTranslator {
             id: this.currentTranscriptId++,
             timestamp: timestamp,
             sourceText: text,
-            translatedText: '翻譯中...'
+            translatedText: this.getStatusText('translating')
         };
         
         this.transcriptHistory.push(transcriptItem);
@@ -1094,11 +1122,11 @@ class RealTimeTranslator {
             
             const sourceText = document.createElement('div');
             sourceText.className = 'source-text';
-            sourceText.textContent = '字幕已清除，準備記錄新的會議內容...';
+            sourceText.textContent = this.getStatusText('transcriptCleared');
             
             const translatedText = document.createElement('div');
             translatedText.className = 'translated-text';
-            translatedText.textContent = 'Transcript cleared, ready to record new meeting content...';
+            translatedText.textContent = this.getStatusText('transcriptClearedEn');
             
             content.appendChild(sourceText);
             content.appendChild(translatedText);
@@ -1112,10 +1140,10 @@ class RealTimeTranslator {
                 this.currentOriginalText = '';
                 this.currentTranslatedText = '';
                 if (this.originalWrapper) {
-                    this.safeSetHTML(this.originalWrapper, '等待語音輸入...');
+                    this.safeSetHTML(this.originalWrapper, this.getStatusText('waitingForSpeech'));
                 }
                 if (this.translatedWrapper) {
-                    this.safeSetHTML(this.translatedWrapper, '等待翻譯結果...');
+                    this.safeSetHTML(this.translatedWrapper, this.getStatusText('waitingForTranslation'));
                 }
                 console.log('簡報模式連續文字流已清空');
             }
@@ -1306,11 +1334,11 @@ class RealTimeTranslator {
                     messages: [
                         {
                             role: 'system',
-                            content: `你是一個即時翻譯助手。請翻譯以下文字到${targetLang}。這是一個增量翻譯，文字可能不完整，請提供最佳的部分翻譯。`
+                            content: `You are a professional real-time meeting translation assistant. Please translate the following text to ${targetLang}. This is an incremental translation during a live meeting where the text may be incomplete - provide the best partial translation available while maintaining professional tone and meeting context.`
                         },
                         {
                             role: 'user',
-                            content: `完整文字: "${fullText}"\n需要特別關注的部分: "${partialText}"\n\n請翻譯到${targetLang}，如果句子不完整也沒關係，提供當前最合理的翻譯。`
+                            content: `Full text: "${fullText}"\nFocus on this part: "${partialText}"\n\nPlease translate to ${targetLang}. Even if the sentence is incomplete, provide the most reasonable translation for the current content.`
                         }
                     ],
                     max_tokens: 500,
@@ -1362,7 +1390,7 @@ class RealTimeTranslator {
         let translatedLines = [];
         
         recentHistory.forEach((item) => {
-            translatedLines.push(item.translatedText || '翻譯中...');
+            translatedLines.push(item.translatedText || this.getStatusText('translating'));
         });
         
         // 清理增量翻譯文字中的換行符號
@@ -1402,7 +1430,7 @@ class RealTimeTranslator {
             const interimSpan = this.translatedWrapper.querySelector('#interim-translation');
             if (interimSpan) {
                 // 重置為翻譯中狀態，保持容器存在
-                interimSpan.textContent = '翻譯中...';
+                interimSpan.textContent = this.getStatusText('translating');
                 console.log('重置臨時翻譯為等待狀態');
             }
             // 清除舊的增量翻譯狀態
@@ -1440,12 +1468,13 @@ class RealTimeTranslator {
                     messages: [
                         {
                             role: 'system',
-                            content: `You are a professional transcription and translation assistant. Your task:
-1. First, add appropriate punctuation to the input text (periods, commas, question marks, etc.)
-2. Then translate the punctuated text to ${this.targetLanguage.value}
+                            content: `You are a professional meeting transcription and translation assistant. Your task:
+1. Add appropriate punctuation to the input text (periods, commas, question marks, etc.) while maintaining natural speech flow
+2. Translate the punctuated text to ${this.targetLanguage.value} with professional meeting context in mind
 3. Return ONLY a JSON object with this format: {"original": "text with punctuation", "translation": "translated text"}
-4. Both texts should have proper punctuation and natural formatting
-5. If input is already in target language, just add punctuation and rephrase naturally`
+4. Both texts should have proper punctuation and natural formatting suitable for meeting documentation
+5. If input is already in target language, just add punctuation and rephrase naturally for clarity
+6. Maintain professional tone appropriate for business meetings`
                         },
                         {
                             role: 'user',
@@ -1521,7 +1550,7 @@ class RealTimeTranslator {
                     messages: [
                         {
                             role: 'system',
-                            content: `You are a professional translator. Automatically detect the input language and translate the following text to ${this.targetLanguage.value}. Add proper punctuation to both input and output. Only respond with the translation, no explanations. If the input is already in the target language, provide a natural rephrasing or keep it as is.`
+                            content: `You are a professional meeting translator. Automatically detect the input language and translate the following text to ${this.targetLanguage.value}. Add proper punctuation and maintain professional meeting tone. Only respond with the translation, no explanations. If the input is already in the target language, provide a natural rephrasing suitable for meeting documentation.`
                         },
                         {
                             role: 'user',
@@ -1674,7 +1703,7 @@ class RealTimeTranslator {
                 displayTranslatedText += this.currentIncrementalTranslation;
                 console.log('簡報模式增量翻譯內容:', this.currentIncrementalTranslation);
             } else {
-                displayTranslatedText += '翻譯中...';
+                displayTranslatedText += this.getStatusText('translating');
             }
             
             displayTranslatedText += '</span>';
@@ -1685,8 +1714,8 @@ class RealTimeTranslator {
         
         // 如果沒有任何內容，顯示預設文字
         if (!displayOriginalText.trim() && !interimTranscript) {
-            displayOriginalText = '<span style="opacity: 0.6;">等待語音輸入...</span>';
-            displayTranslatedText = '<span style="opacity: 0.6;">等待翻譯結果...</span>';
+            displayOriginalText = `<span style="opacity: 0.6;">${this.getStatusText('waitingForSpeech')}</span>`;
+            displayTranslatedText = `<span style="opacity: 0.6;">${this.getStatusText('waitingForTranslation')}</span>`;
         }
         
         // 更新單行顯示
@@ -1844,7 +1873,7 @@ class RealTimeTranslator {
         if (this.currentOriginalText && this.currentOriginalText.trim()) {
             this.safeSetHTML(this.originalWrapper, this.currentOriginalText);
         } else {
-            this.safeSetHTML(this.originalWrapper, '等待語音輸入...');
+            this.safeSetHTML(this.originalWrapper, this.getStatusText('waitingForSpeech'));
         }
         
         if (this.currentTranslatedText && this.currentTranslatedText.trim()) {
@@ -1855,9 +1884,9 @@ class RealTimeTranslator {
             }
         } else {
             if (this.isPresentationMode) {
-                this.setPresentationHTML(this.translatedWrapper, '等待翻譯結果...');
+                this.setPresentationHTML(this.translatedWrapper, this.getStatusText('waitingForTranslation'));
             } else {
-                this.safeSetHTML(this.translatedWrapper, '等待翻譯結果...');
+                this.safeSetHTML(this.translatedWrapper, this.getStatusText('waitingForTranslation'));
             }
         }
         
