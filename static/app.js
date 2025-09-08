@@ -1138,10 +1138,10 @@ class RealTimeTranslator {
 
     updateUI() {
         if (this.continuousMode) {
-            this.recordBtn.textContent = '⏹️ 停止會議模式';
+            this.recordBtn.textContent = '⏹️ 停止語音辨識';
             this.recordBtn.classList.remove('stopped');
         } else {
-            this.recordBtn.textContent = '🔴 開始會議模式';
+            this.recordBtn.textContent = '🔴 開始語音辨識';
             this.recordBtn.classList.add('stopped');
         }
     }
