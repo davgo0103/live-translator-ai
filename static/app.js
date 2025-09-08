@@ -41,9 +41,6 @@ class RealTimeTranslator {
         
         // 啟用 Wake Lock 防止整個網頁休眠
         this.initializeWakeLock();
-        
-        // 測試樣式過濾器
-        this.testStyleFiltering();
     }
 
     // XSS防護：安全文本清理函數
@@ -88,15 +85,12 @@ class RealTimeTranslator {
                                 style.startsWith('margin-left: ') ||
                                 style.startsWith('animation: ')) {
                                 allowedStyles.push(style);
-                                console.log(`允許樣式: ${style}`);
                             } else {
-                                console.log(`拒絕樣式: ${style}`);
                             }
                         }
                         
                         if (allowedStyles.length > 0) {
                             const finalStyle = `<span style="${allowedStyles.join('; ')}">`;
-                            console.log(`樣式過濾結果: "${styleMatch[1]}" -> "${finalStyle}"`);
                             return finalStyle;
                         } else {
                             console.log(`樣式被過濾掉: "${styleMatch[1]}"`);
@@ -217,44 +211,6 @@ class RealTimeTranslator {
             console.log('語音活動檢測到，重置重試計數');
             this.recognitionRetryCount = 0;
         }
-    }
-
-    // 調試函數 - 測試樣式過濾
-    testStyleFilter(styleString) {
-        const allowedStylePattern = /^(opacity:\s*[\d.]+;?\s*|font-style:\s*italic;?\s*|color:\s*[#\w\(\),\s.]+;?\s*|background:\s*rgba?\([^\)]+\);?\s*|padding:\s*[\dpx\s]+;?\s*|border-radius:\s*[\dpx\s]+;?\s*|margin-left:\s*[\dpx\s]+;?\s*|animation:\s*[\w\s]+;?\s*)*$/;
-        const result = allowedStylePattern.test(styleString);
-        console.log(`樣式測試: "${styleString}" -> ${result}`);
-        return result;
-    }
-
-    testStyleFiltering() {
-        console.log('=== 測試樣式過濾器 ===');
-        
-        // 測試我們實際使用的樣式字符串
-        const testStyles = [
-            'opacity: 0.8; font-style: italic; color: #4ade80; background: rgba(74, 222, 128, 0.15); padding: 0 4px; border-radius: 3px',
-            'opacity: 0.6; font-style: italic; color: #94a3b8; background: rgba(148, 163, 184, 0.1); padding: 0 4px; border-radius: 3px',
-            'opacity: 0.8; font-style: italic; color: #7dd3fc; background: rgba(125, 211, 252, 0.15); padding: 0 4px; border-radius: 3px'
-        ];
-        
-        testStyles.forEach((styleString, index) => {
-            console.log(`測試樣式 ${index + 1}: "${styleString}"`);
-            
-            // 測試safeSetHTML
-            const testElement1 = document.createElement('div');
-            const testHTML = `<span style="${styleString}">測試文字</span>`;
-            console.log(`原始HTML: ${testHTML}`);
-            this.safeSetHTML(testElement1, testHTML);
-            console.log(`safeSetHTML結果: ${testElement1.innerHTML}`);
-            
-            // 測試setPresentationHTML
-            const testElement2 = document.createElement('div');
-            this.setPresentationHTML(testElement2, testHTML);
-            console.log(`setPresentationHTML結果: ${testElement2.innerHTML}`);
-            console.log('---');
-        });
-        
-        console.log('=== 測試完成 ===');
     }
 
     // 專門用於簡報模式臨時翻譯的安全HTML設置
@@ -788,7 +744,6 @@ class RealTimeTranslator {
                 // 立即更新簡報模式顯示，不管內容是否變化
                 this.updatePresentationLiveText(currentFinal, currentInterim);
                 
-                // 調試信息
                 if (currentFinal || currentInterim) {
                     console.log(`簡報即時更新: 最終="${currentFinal}" 臨時="${currentInterim}"`);
                 }
@@ -1452,18 +1407,14 @@ class RealTimeTranslator {
         const existing = existingText.trim();
         const incoming = newText.trim();
         
-        console.log(`🔍 合併文字 - 現有: "${existing}"`);
-        console.log(`🔍 合併文字 - 新增: "${incoming}"`);
         
         // 檢查新文字是否完全包含在現有文字中
         if (existing.includes(incoming)) {
-            console.log(`🔄 新文字已包含在現有文字中，保持現有文字`);
             return existing;
         }
         
         // 檢查現有文字是否完全包含在新文字中
         if (incoming.includes(existing)) {
-            console.log(`🔄 現有文字已包含在新文字中，使用新文字`);
             return incoming;
         }
         
@@ -1486,12 +1437,10 @@ class RealTimeTranslator {
         if (overlapLength > 0) {
             // 找到重疊，合併時去除重複部分
             const merged = existing + incoming.slice(overlapLength);
-            console.log(`✅ 發現重疊 ${overlapLength} 字符，合併結果: "${merged}"`);
             return merged;
         } else {
             // 沒有重疊，直接連接
             const merged = existing + ' ' + incoming;
-            console.log(`➕ 無重疊，直接連接: "${merged}"`);
             return merged;
         }
     }
@@ -1509,18 +1458,14 @@ class RealTimeTranslator {
         const existing = existingTranslation.trim();
         const incoming = newTranslation.trim();
         
-        console.log(`🔍 翻譯去重 - 現有: "${existing}"`);
-        console.log(`🔍 翻譯去重 - 新的: "${incoming}"`);
         
         // 如果新翻譯是現有翻譯的一部分，保持現有的
         if (existing.includes(incoming) && existing.length > incoming.length) {
-            console.log(`🔄 新翻譯已包含在現有翻譯中，保持現有翻譯`);
             return existing;
         }
         
         // 如果現有翻譯是新翻譯的一部分，使用新翻譯
         if (incoming.includes(existing) && incoming.length > existing.length) {
-            console.log(`🔄 現有翻譯已包含在新翻譯中，使用新翻譯`);
             return incoming;
         }
         
@@ -1539,25 +1484,21 @@ class RealTimeTranslator {
                 // 合併時去除重複部分
                 const uniqueIncomingWords = incomingWords.slice(overlap);
                 const merged = existingWords.concat(uniqueIncomingWords).join(' ');
-                console.log(`✅ 檢測到詞彙重複，合併結果: "${merged}"`);
                 return merged;
             }
         }
         
         // 如果完全相同，返回其中一個
         if (existing === incoming) {
-            console.log(`🔄 翻譯內容完全相同，保持現有`);
             return existing;
         }
         
         // 檢查是否是簡單的擴展（新內容在末尾添加）
         if (incoming.startsWith(existing)) {
-            console.log(`➕ 新翻譯是現有翻譯的擴展，使用新翻譯`);
             return incoming;
         }
         
         // 其他情況，保持新的翻譯（通常是改進的結果）
-        console.log(`🔄 使用新翻譯替換現有翻譯`);
         return incoming;
     }
 
@@ -1616,14 +1557,12 @@ class RealTimeTranslator {
         
         // 智能合併文字，避免重複
         const fullPendingText = this.smartMergeText(this.pendingOriginalText, interimText);
-        console.log(`📝 累積的待處理文字: "${fullPendingText}"`);
         
         // 檢測句子邊界
         const { completedSentences, remainingText } = this.splitTextAtSentenceBoundary(fullPendingText);
         
         // 如果發現完整句子，立即處理
         if (completedSentences) {
-            console.log(`✅ 檢測到完整句子: "${completedSentences}"`);
             console.log(`⏳ 剩餘文字: "${remainingText}"`);
             
             // 將完整句子轉為正式翻譯記錄
@@ -1651,7 +1590,6 @@ class RealTimeTranslator {
 
     // 處理完整句子 - 將其轉為正式翻譯記錄
     processCompletedSentence(completedSentences) {
-        console.log(`🎯 處理完整句子: "${completedSentences}"`);
         
         // 產生新的轉錄項目ID
         const transcriptId = Date.now() + '-completed';
@@ -1662,7 +1600,6 @@ class RealTimeTranslator {
         // 觸發正式翻譯
         this.addPunctuationAndTranslate(completedSentences, transcriptId);
         
-        console.log(`📋 完整句子已加入正式記錄，ID: ${transcriptId}`);
     }
 
     // 執行增量翻譯
@@ -1673,11 +1610,9 @@ class RealTimeTranslator {
         if (shouldTranslate) {
             const delay = text.length > 10 ? 300 : 600; // 較長文字更快翻譯
             this.translationUpdateTimer = setTimeout(() => {
-                console.log(`🔄 增量翻譯 (${text.length}字): "${text}"`);
                 this.translateIncrementalText(text, text); // 直接翻譯剩餘文字
             }, delay);
         } else {
-            console.log(`⏸️ 文字太短，暫不翻譯: "${text}"`);
         }
     }
 
@@ -1832,7 +1767,6 @@ class RealTimeTranslator {
         // 清除句子邊界檢測的待處理狀態
         this.pendingOriginalText = '';
         this.pendingTranslationText = '';
-        console.log('🧹 句子邊界檢測狀態已清理');
         
         // 清理當前顯示中的增量翻譯標記
         const currentTextContent = this.currentText.innerHTML;
