@@ -1093,6 +1093,10 @@ class RealTimeTranslator {
         this.pendingOriginalText = '';
         this.pendingTranslationText = '';
         
+        // 清理所有臨時翻譯狀態
+        this.clearIncrementalTranslation();
+        this.currentIncrementalTranslation = '';
+        
         this.isRecording = false;
         this.updateUI();
         this.updateStatus('source', 'ready', '已停止');
@@ -1392,12 +1396,12 @@ class RealTimeTranslator {
             // 執行最終翻譯，不立即清理顯示
             this.addPunctuationAndTranslate(finalTranscript, this.currentTranscriptId);
             
-            // 延遲清理，避免快速語音時翻譯消失
+            // 延遲清理，避免與 completeInterimTranslation 衝突
             this.incrementalTranslationCleanupTimer = setTimeout(() => {
                 if (!this.isCompletingTranslation) {
                     this.clearIncrementalTranslation();
                 }
-            }, 150); // 給翻譯API充足時間
+            }, 400); // 增加延遲時間，讓 completeInterimTranslation 的 300ms 先完成
             
         } else if (interimTranscript.trim() && this.incrementalTranslation.checked) {
             // 只有臨時結果，且啟用增量翻譯時才進行
@@ -1574,7 +1578,10 @@ class RealTimeTranslator {
         
         // 如果發現完整句子，立即處理
         if (completedSentences) {
-            console.log(`⏳ 剩餘文字: "${remainingText}"`);
+            console.log(`⏳ 完整句子: "${completedSentences}" | 剩餘文字: "${remainingText}"`);
+            
+            // 清理當前臨時翻譯狀態，避免與正式翻譯衝突
+            this.currentIncrementalTranslation = '';
             
             // 將完整句子轉為正式翻譯記錄
             this.processCompletedSentence(completedSentences);
@@ -1584,10 +1591,12 @@ class RealTimeTranslator {
             
             // 對剩餘部分進行增量翻譯
             if (remainingText.trim()) {
-                this.performIncrementalTranslation(remainingText);
+                // 給正式翻譯一些時間後才開始增量翻譯
+                setTimeout(() => {
+                    this.performIncrementalTranslation(remainingText);
+                }, 200);
             } else {
                 // 如果沒有剩餘文字，清除增量翻譯狀態
-                this.currentIncrementalTranslation = '';
                 this.updateInterimTranslationContent('');
             }
         } else {
@@ -1744,13 +1753,8 @@ class RealTimeTranslator {
         // 儲存增量翻譯狀態
         this.currentIncrementalTranslation = deduplicatedTranslation;
         
-        // 優先使用動態更新，如果失敗則使用完整更新
-        if (this.isPresentationMode) {
-            this.updateInterimTranslationContent(deduplicatedTranslation);
-        } else {
-            // 立即更新簡報模式的連續文字流顯示
-            this.updatePresentationLiveText('', '');
-        }
+        // 優先使用動態更新
+        this.updateInterimTranslationContent(deduplicatedTranslation);
     }
 
     clearIncrementalTranslation() {
