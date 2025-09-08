@@ -17,6 +17,10 @@ class RealTimeTranslator {
         this.currentOriginalText = ''; // 當前原文累積文字
         this.currentTranslatedText = ''; // 當前翻譯累積文字
         
+        // 翻譯請求管理
+        this.activeTranslationRequests = 0;
+        this.maxConcurrentTranslations = 3; // 最多同時進行3個翻譯請求
+        
         // 語音識別重啟保護和狀態管理
         this.recognitionRetryCount = 0;
         this.maxRecognitionRetries = 999; // 會議模式需要無限重試保持連續
@@ -1377,7 +1381,7 @@ class RealTimeTranslator {
         }
     }
 
-    handleRealtimeTranslation(finalTranscript, interimTranscript) {
+    async handleRealtimeTranslation(finalTranscript, interimTranscript) {
         // 處理即時翻譯邏輯 - 優化快速語音識別
         const currentText = finalTranscript + interimTranscript;
         
@@ -1393,15 +1397,20 @@ class RealTimeTranslator {
                 clearTimeout(this.incrementalTranslationCleanupTimer);
             }
             
-            // 執行最終翻譯，不立即清理顯示
-            this.addPunctuationAndTranslate(finalTranscript, this.currentTranscriptId);
-            
-            // 延遲清理，避免與 completeInterimTranslation 衝突
-            this.incrementalTranslationCleanupTimer = setTimeout(() => {
-                if (!this.isCompletingTranslation) {
-                    this.clearIncrementalTranslation();
-                }
-            }, 400); // 增加延遲時間，讓 completeInterimTranslation 的 300ms 先完成
+            // 執行最終翻譯，等待完成後再清理
+            try {
+                await this.addPunctuationAndTranslate(finalTranscript, this.currentTranscriptId);
+                
+                // 翻譯完成後的清理，給 completeInterimTranslation 時間完成
+                this.incrementalTranslationCleanupTimer = setTimeout(() => {
+                    if (!this.isCompletingTranslation) {
+                        this.clearIncrementalTranslation();
+                    }
+                }, 350); // 略小於 completeInterimTranslation 的 300ms
+            } catch (error) {
+                console.error('翻譯錯誤:', error);
+                this.clearIncrementalTranslation();
+            }
             
         } else if (interimTranscript.trim() && this.incrementalTranslation.checked) {
             // 只有臨時結果，且啟用增量翻譯時才進行
@@ -1583,8 +1592,10 @@ class RealTimeTranslator {
             // 清理當前臨時翻譯狀態，避免與正式翻譯衝突
             this.currentIncrementalTranslation = '';
             
-            // 將完整句子轉為正式翻譯記錄
-            this.processCompletedSentence(completedSentences);
+            // 將完整句子轉為正式翻譯記錄（異步處理）
+            this.processCompletedSentence(completedSentences).catch(error => {
+                console.error('處理完整句子錯誤:', error);
+            });
             
             // 更新待處理文字為剩餘部分
             this.pendingOriginalText = remainingText;
@@ -1609,7 +1620,7 @@ class RealTimeTranslator {
     }
 
     // 處理完整句子 - 將其轉為正式翻譯記錄
-    processCompletedSentence(completedSentences) {
+    async processCompletedSentence(completedSentences) {
         
         // 產生新的轉錄項目ID
         const transcriptId = Date.now() + '-completed';
@@ -1617,8 +1628,10 @@ class RealTimeTranslator {
         // 立即添加到轉錄歷史
         this.addTranscriptItem(completedSentences, transcriptId);
         
-        // 觸發正式翻譯
-        this.addPunctuationAndTranslate(completedSentences, transcriptId);
+        // 觸發正式翻譯（異步處理但不等待，避免阻塞臨時翻譯）
+        this.addPunctuationAndTranslate(completedSentences, transcriptId).catch(error => {
+            console.error('句子翻譯錯誤:', error);
+        });
         
     }
 
@@ -1670,6 +1683,14 @@ class RealTimeTranslator {
             console.warn('API Key 未設定，跳過增量翻譯');
             return;
         }
+        
+        // 增量翻譯使用較寬鬆的限制（優先度較低）
+        if (this.activeTranslationRequests >= this.maxConcurrentTranslations + 1) {
+            console.warn('系統繁忙，跳過增量翻譯');
+            return;
+        }
+        
+        this.activeTranslationRequests++;
 
         const targetLang = this.targetLanguage.value;
         
@@ -1709,6 +1730,8 @@ class RealTimeTranslator {
             
         } catch (error) {
             console.error('增量翻譯錯誤:', error);
+        } finally {
+            this.activeTranslationRequests = Math.max(0, this.activeTranslationRequests - 1);
         }
     }
 
@@ -1822,6 +1845,15 @@ class RealTimeTranslator {
 
     async addPunctuationAndTranslate(text, transcriptId) {
         if (!text.trim() || !this.apiKey) return;
+        
+        // 翻譯請求限流檢查
+        if (this.activeTranslationRequests >= this.maxConcurrentTranslations) {
+            console.warn('翻譯請求過多，跳過此次請求');
+            return;
+        }
+        
+        this.activeTranslationRequests++;
+        console.log(`正在進行翻譯請求: ${this.activeTranslationRequests}/${this.maxConcurrentTranslations}`);
 
         try {
             // 使用GPT同時添加標點符號和翻譯
@@ -1900,11 +1932,23 @@ class RealTimeTranslator {
             if (this.isPresentationMode) {
                 this.completeInterimTranslation('');
             }
+        } finally {
+            // 翻譯完成或錯誤時減少計數
+            this.activeTranslationRequests = Math.max(0, this.activeTranslationRequests - 1);
+            console.log(`翻譯請求完成: ${this.activeTranslationRequests}/${this.maxConcurrentTranslations}`);
         }
     }
 
     async translateText(text, transcriptId) {
         if (!text.trim() || !this.apiKey) return;
+        
+        // 翻譯請求限流檢查
+        if (this.activeTranslationRequests >= this.maxConcurrentTranslations) {
+            console.warn('翻譯請求過多，跳過此次請求');
+            return;
+        }
+        
+        this.activeTranslationRequests++;
 
         try {
             const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -1942,6 +1986,8 @@ class RealTimeTranslator {
         } catch (error) {
             console.error('翻譯錯誤:', error);
             this.updateTranscriptTranslation(transcriptId, `翻譯失敗: ${error.message}`);
+        } finally {
+            this.activeTranslationRequests = Math.max(0, this.activeTranslationRequests - 1);
         }
     }
 
