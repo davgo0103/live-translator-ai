@@ -12,7 +12,15 @@ class RealTimeTranslator {
         this.totalWordCount = 0;
         this.autoDetectLanguages = ['zh-TW', 'en-US'];
         this.currentLanguageIndex = 0;
-        this.presentationMaxItems = 5; // 簡報模式最多顯示5句話
+        this.presentationMaxItems = 5;
+        this.maxTextLength = 800; // 最大文字長度
+        this.currentOriginalText = ''; // 當前原文累積文字
+        this.currentTranslatedText = ''; // 當前翻譯累積文字
+        
+        // 語音識別重啟保護
+        this.recognitionRetryCount = 0;
+        this.maxRecognitionRetries = 5;
+        this.recognitionRestartDelay = 100;
         
         this.initElements();
         this.setupNoiseControlListeners();
@@ -236,7 +244,14 @@ class RealTimeTranslator {
         // 優化語音識別設定 - 根據 Web Speech API 最佳實踐
         this.recognition.continuous = true;
         this.recognition.interimResults = true;
-        this.recognition.maxAlternatives = 3; // 獲取多個候選結果提升準確度
+        this.recognition.maxAlternatives = 5; // 更多候選結果提升準確度
+        
+        // 針對簡報模式優化語音識別參數
+        if (this.isPresentationMode) {
+            // 更頻繁的結果更新
+            this.recognition.interimResults = true;
+            this.recognition.continuous = true;
+        }
         
         this.setRecognitionLanguage();
 
@@ -244,14 +259,32 @@ class RealTimeTranslator {
             this.isRecording = true;
             this.updateUI();
             console.log('語音識別已啟動');
+            
+            // 成功啟動時重置重試計數器
+            this.recognitionRetryCount = 0;
+            
+            // 清空當前顯示的臨時文字
+            this.currentText.innerHTML = '';
+            
+            // 簡報模式不需要清空，保持連續文字流
         };
 
         this.recognition.onend = () => {
             console.log('語音識別結束，重新啟動...');
             if (this.continuousMode) {
-                setTimeout(() => {
-                    this.startRecognition();
-                }, 100);
+                if (this.recognitionRetryCount < this.maxRecognitionRetries) {
+                    this.recognitionRetryCount++;
+                    const delay = Math.min(this.recognitionRestartDelay * this.recognitionRetryCount, 2000);
+                    console.log(`語音識別重啟 (第${this.recognitionRetryCount}次，延遲${delay}ms)`);
+                    
+                    setTimeout(() => {
+                        this.startRecognition();
+                    }, delay);
+                } else {
+                    console.error('語音識別重試次數已達上限，停止自動重啟');
+                    this.stopContinuousRecording();
+                    alert('語音識別遇到問題，請檢查麥克風權限後重新開始');
+                }
             } else {
                 this.isRecording = false;
                 this.updateUI();
@@ -354,9 +387,18 @@ class RealTimeTranslator {
             this.currentText.innerHTML = finalTranscript + 
                 '<span class="interim-text"> ' + interimTranscript + '</span>';
 
-            // 簡報模式即時更新
+            // 簡報模式即時更新 - 更頻繁、更精確的更新
             if (this.isPresentationMode) {
-                this.updatePresentationLiveText(finalTranscript, interimTranscript);
+                const currentFinal = finalTranscript.trim();
+                const currentInterim = interimTranscript.trim();
+                
+                // 立即更新簡報模式顯示，不管內容是否變化
+                this.updatePresentationLiveText(currentFinal, currentInterim);
+                
+                // 調試信息
+                if (currentFinal || currentInterim) {
+                    console.log(`簡報即時更新: 最終="${currentFinal}" 臨時="${currentInterim}"`);
+                }
             }
 
             // 即時翻譯處理
@@ -580,20 +622,23 @@ class RealTimeTranslator {
     }
 
     updateTranscriptTranslation(id, translation) {
+        // 清理翻譯內容中的換行符號
+        const cleanTranslation = translation ? translation.replace(/\n+/g, ' ').replace(/\s+/g, ' ') : '';
+        
         const element = document.getElementById(`transcript-${id}`);
         if (element) {
             const translatedDiv = element.querySelector('.translated-text');
-            translatedDiv.textContent = translation;
+            translatedDiv.textContent = cleanTranslation;
         }
         
         const historyItem = this.transcriptHistory.find(item => item.id === id);
         if (historyItem) {
-            historyItem.translatedText = translation;
+            historyItem.translatedText = cleanTranslation;
         }
         
         // 更新簡報模式內容
         if (this.isPresentationMode) {
-            this.updatePresentationHistory();
+            this.updatePresentationTranslationFlow(id, cleanTranslation);
         }
     }
 
@@ -620,6 +665,19 @@ class RealTimeTranslator {
                 </div>
             `;
             this.updateWordCount();
+
+            // 清空簡報模式的連續文字流
+            if (this.isPresentationMode) {
+                this.currentOriginalText = '';
+                this.currentTranslatedText = '';
+                if (this.originalWrapper) {
+                    this.originalWrapper.innerHTML = '等待語音輸入...';
+                }
+                if (this.translatedWrapper) {
+                    this.translatedWrapper.innerHTML = '等待翻譯結果...';
+                }
+                console.log('簡報模式連續文字流已清空');
+            }
         }
     }
 
@@ -824,7 +882,7 @@ class RealTimeTranslator {
             }
 
             const data = await response.json();
-            const translatedText = data.choices[0].message.content.trim();
+            const translatedText = data.choices[0].message.content.trim().replace(/\n+/g, ' ').replace(/\s+/g, ' ');
             
             // 更新即時翻譯顯示
             this.updateIncrementalTranslation(translatedText, partialText);
@@ -835,19 +893,22 @@ class RealTimeTranslator {
     }
 
     updateIncrementalTranslation(translatedText, originalPart) {
+        // 清理增量翻譯內容中的換行符號
+        const cleanTranslatedText = translatedText ? translatedText.replace(/\n+/g, ' ').replace(/\s+/g, ' ') : '';
+        
         // 更新增量翻譯的顯示
-        console.log(`增量翻譯結果: "${originalPart}" -> "${translatedText}"`);
+        console.log(`增量翻譯結果: "${originalPart}" -> "${cleanTranslatedText}"`);
         
         // 在當前顯示區域顯示增量翻譯（用特殊樣式標記）
         const currentDisplay = this.currentText.innerHTML;
-        const incrementalHtml = `<span class="incremental-translation" style="color: #4facfe; font-style: italic; opacity: 0.8;">[${translatedText}]</span>`;
+        const incrementalHtml = `<span class="incremental-translation" style="color: #4facfe; font-style: italic; opacity: 0.8;">[${cleanTranslatedText}]</span>`;
         
         // 暫時顯示增量翻譯
         this.currentText.innerHTML = currentDisplay + ' ' + incrementalHtml;
         
         // 簡報模式也更新
         if (this.isPresentationMode) {
-            this.updatePresentationIncrementalTranslation(translatedText);
+            this.updatePresentationIncrementalTranslation(cleanTranslatedText);
         }
     }
 
@@ -863,13 +924,14 @@ class RealTimeTranslator {
             translatedLines.push(item.translatedText || '翻譯中...');
         });
         
-        // 添加當前的增量翻譯
-        translatedLines.push(`<span style="opacity: 0.7; font-style: italic; color: #4facfe;">[${translatedText}]</span>`);
+        // 清理增量翻譯文字中的換行符號
+        const cleanTranslatedText = translatedText ? translatedText.replace(/\n+/g, ' ').replace(/\s+/g, ' ') : '';
         
-        this.translatedWrapper.innerHTML = translatedLines.join('<br>');
+        // 儲存增量翻譯狀態
+        this.currentIncrementalTranslation = cleanTranslatedText;
         
-        // 自動捲動
-        this.forceScrollToBottom(this.translatedContent);
+        // 立即更新簡報模式的連續文字流顯示
+        this.updatePresentationLiveText('', '');
     }
 
     clearIncrementalTranslation() {
@@ -953,14 +1015,18 @@ class RealTimeTranslator {
             }
 
             const data = await response.json();
-            const result = data.choices[0].message.content.trim();
+            const result = data.choices[0].message.content.trim().replace(/\n+/g, ' ').replace(/\s+/g, ' ');
             
             try {
                 const parsed = JSON.parse(result);
+                // 清理解析後的內容中的換行符號
+                const cleanOriginal = parsed.original ? parsed.original.replace(/\n+/g, ' ').replace(/\s+/g, ' ') : '';
+                const cleanTranslation = parsed.translation ? parsed.translation.replace(/\n+/g, ' ').replace(/\s+/g, ' ') : '';
+                
                 // 添加有標點符號的原文
-                this.addTranscriptItem(parsed.original);
+                this.addTranscriptItem(cleanOriginal);
                 // 更新翻譯
-                this.updateTranscriptTranslation(transcriptId, parsed.translation);
+                this.updateTranscriptTranslation(transcriptId, cleanTranslation);
             } catch (parseError) {
                 // 如果JSON解析失敗，使用原本邏輯
                 console.log('JSON解析失敗，使用備用方法');
@@ -1008,7 +1074,7 @@ class RealTimeTranslator {
             }
 
             const data = await response.json();
-            const translation = data.choices[0].message.content.trim();
+            const translation = data.choices[0].message.content.trim().replace(/\n+/g, ' ').replace(/\s+/g, ' ');
             
             this.updateTranscriptTranslation(transcriptId, translation);
 
@@ -1039,6 +1105,9 @@ class RealTimeTranslator {
         this.controlsExpanded = false;
         this.presentationControls.classList.add('collapsed');
         console.log('簡報模式啟動，控制面板初始化為收縮狀態');
+        
+        // 初始化連續文字流
+        this.initializePresentationTextFlow();
         
         // 取得文字容器
         this.originalWrapper = this.originalContent.querySelector('.text-wrapper');
@@ -1111,52 +1180,167 @@ class RealTimeTranslator {
     updatePresentationLiveText(finalTranscript, interimTranscript) {
         if (!this.originalWrapper || !this.translatedWrapper) return;
         
-        // 獲取最近幾句話的歷史記錄
-        const recentHistory = this.transcriptHistory.slice(-this.presentationMaxItems);
-        
-        let originalText = '';
-        let translatedText = '';
-        
-        // 添加歷史記錄
-        recentHistory.forEach((item, index) => {
-            if (index > 0) {
-                originalText += '\n';
-                translatedText += '\n';
+        // 處理新的最終識別結果 - 連續追加不換行
+        if (finalTranscript && finalTranscript.trim()) {
+            const newText = finalTranscript.trim();
+            // 檢查是否為新內容，避免重複
+            const lastPart = this.currentOriginalText.slice(-newText.length - 10);
+            if (!lastPart.includes(newText)) {
+                this.currentOriginalText += newText + ' ';
+                this.currentTranslatedText += newText + ' ';
             }
-            originalText += item.sourceText;
-            translatedText += item.translatedText || item.sourceText;
-        });
+        }
         
-        // 添加當前正在識別的文字
-        if (finalTranscript || interimTranscript) {
-            if (originalText) originalText += '\n';
-            originalText += finalTranscript;
-            if (interimTranscript) {
-                originalText += ' <span style="opacity: 0.6; font-style: italic;">' + interimTranscript + '</span>';
-            }
+        // 自動清理過長的文字（適合自然換行顯示）
+        this.managePresentationTextLength();
+        
+        // 構建顯示文字 - 連續流動，自然換行
+        let displayOriginalText = this.currentOriginalText;
+        let displayTranslatedText = this.currentTranslatedText;
+        
+        // 添加當前正在識別的臨時文字（即時逐字顯示）
+        if (interimTranscript && interimTranscript.trim()) {
+            displayOriginalText += '<span style="opacity: 0.8; font-style: italic; color: #7dd3fc; background: rgba(125, 211, 252, 0.15); padding: 0 4px; border-radius: 3px;">' + interimTranscript + '</span>';
             
-            // 翻譯區顯示當前翻譯或原文
-            if (translatedText) translatedText += '\n';
-            if (this.currentIncrementalTranslation) {
-                translatedText += this.currentIncrementalTranslation;
+            // 翻譯區域顯示即時翻譯或臨時文字
+            if (this.currentIncrementalTranslation && this.currentIncrementalTranslation.trim()) {
+                displayTranslatedText += '<span style="opacity: 0.8; font-style: italic; color: #4ade80; background: rgba(74, 222, 128, 0.15); padding: 0 4px; border-radius: 3px;">' + this.currentIncrementalTranslation + '</span>';
             } else {
-                translatedText += finalTranscript || interimTranscript || '';
+                displayTranslatedText += '<span style="opacity: 0.6; font-style: italic; color: #94a3b8;">翻譯中...</span>';
             }
         }
         
         // 如果沒有任何內容，顯示預設文字
-        if (!originalText.trim()) {
-            originalText = '等待語音輸入...';
-            translatedText = '等待翻譯結果...';
+        if (!displayOriginalText.trim() && !interimTranscript) {
+            displayOriginalText = '<span style="opacity: 0.6;">等待語音輸入...</span>';
+            displayTranslatedText = '<span style="opacity: 0.6;">等待翻譯結果...</span>';
         }
         
-        // 更新顯示內容
-        this.originalWrapper.innerHTML = originalText.replace(/\n/g, '<br>');
-        this.translatedWrapper.innerHTML = translatedText.replace(/\n/g, '<br>');
+        // 更新單行顯示
+        this.updateSingleLineDisplay(displayOriginalText, displayTranslatedText);
+    }
+
+    managePresentationTextLengthForSingleLine() {
+        // 針對單行顯示的文字長度管理 - 更積極地清理
+        const maxLength = 200; // 更短的長度限制，適合單行顯示
         
-        // 自動捲動到底部
-        this.autoScrollToBottom(this.originalContent);
-        this.autoScrollToBottom(this.translatedContent);
+        if (this.currentOriginalText.length > maxLength) {
+            const cutPoint = this.findGoodCutPoint(this.currentOriginalText, maxLength * 0.6);
+            this.currentOriginalText = this.currentOriginalText.substring(cutPoint);
+            console.log('原文已自動清理以保持單行顯示');
+        }
+        
+        if (this.currentTranslatedText.length > maxLength) {
+            const cutPoint = this.findGoodCutPoint(this.currentTranslatedText, maxLength * 0.6);
+            this.currentTranslatedText = this.currentTranslatedText.substring(cutPoint);
+            console.log('翻譯已自動清理以保持單行顯示');
+        }
+    }
+
+    updateSingleLineDisplay(originalText, translatedText) {
+        // 更新單行顯示，並實現動態文字滾動效果
+        this.originalWrapper.innerHTML = originalText;
+        this.translatedWrapper.innerHTML = translatedText;
+        
+        // 為正在識別的文字添加打字機效果
+        this.addTypingEffect();
+    }
+
+    addTypingEffect() {
+        // 為臨時識別文字添加打字機光標效果
+        const interimSpans = this.originalWrapper.querySelectorAll('span[style*="italic"]');
+        interimSpans.forEach(span => {
+            if (!span.textContent.includes('|')) {
+                span.innerHTML += '<span style="animation: blink 1s infinite;">|</span>';
+            }
+        });
+    }
+
+    managePresentationTextLength() {
+        // 管理原文文字長度
+        if (this.currentOriginalText.length > this.maxTextLength) {
+            // 找到適合的截斷點（空格或句號後）
+            const cutPoint = this.findGoodCutPoint(this.currentOriginalText, this.maxTextLength * 0.7);
+            this.currentOriginalText = this.currentOriginalText.substring(cutPoint);
+            console.log('原文文字過長，已自動清理');
+        }
+        
+        // 管理翻譯文字長度
+        if (this.currentTranslatedText.length > this.maxTextLength) {
+            const cutPoint = this.findGoodCutPoint(this.currentTranslatedText, this.maxTextLength * 0.7);
+            this.currentTranslatedText = this.currentTranslatedText.substring(cutPoint);
+            console.log('翻譯文字過長，已自動清理');
+        }
+    }
+
+    findGoodCutPoint(text, targetLength) {
+        // 尋找合適的截斷點，優先選擇句號、問號、驚嘆號後面
+        const sentenceEnders = ['. ', '。 ', '? ', '？ ', '! ', '！ '];
+        
+        for (let i = Math.floor(targetLength); i < text.length && i < targetLength + 100; i++) {
+            for (const ender of sentenceEnders) {
+                if (text.substring(i, i + ender.length) === ender) {
+                    return i + ender.length;
+                }
+            }
+        }
+        
+        // 如果找不到句子結尾，尋找空格
+        for (let i = Math.floor(targetLength); i < text.length && i < targetLength + 50; i++) {
+            if (text[i] === ' ') {
+                return i + 1;
+            }
+        }
+        
+        // 最後直接截斷
+        return Math.floor(targetLength);
+    }
+
+    updatePresentationTranslationFlow(translationId, translation) {
+        // 單行顯示的翻譯流更新
+        if (!this.translatedWrapper) return;
+        
+        // 重新構建翻譯文字流 - 保持單行格式
+        let rebuiltTranslatedText = '';
+        for (const item of this.transcriptHistory) {
+            if (item.translatedText) {
+                rebuiltTranslatedText += item.translatedText + ' ';
+            } else {
+                rebuiltTranslatedText += item.sourceText + ' ';
+            }
+        }
+        
+        // 更新累積的翻譯文字
+        this.currentTranslatedText = rebuiltTranslatedText;
+        
+        // 管理文字長度（適合自然換行顯示）
+        this.managePresentationTextLength();
+        
+        // 更新翻譯顯示，允許自然換行
+        this.translatedWrapper.innerHTML = this.currentTranslatedText;
+        
+        console.log(`簡報模式翻譯更新: ID ${translationId}, 長度: ${this.currentTranslatedText.length}`);
+    }
+
+    initializePresentationTextFlow() {
+        // 基於現有歷史記錄初始化連續文字流
+        this.currentOriginalText = '';
+        this.currentTranslatedText = '';
+        
+        // 從歷史記錄重建文字流
+        for (const item of this.transcriptHistory) {
+            this.currentOriginalText += item.sourceText + ' ';
+            if (item.translatedText) {
+                this.currentTranslatedText += item.translatedText + ' ';
+            } else {
+                this.currentTranslatedText += item.sourceText + ' ';
+            }
+        }
+        
+        // 管理文字長度
+        this.managePresentationTextLength();
+        
+        console.log('簡報模式連續文字流已初始化');
     }
 
     updatePresentationContent() {
@@ -1230,11 +1414,7 @@ class RealTimeTranslator {
         
         console.log(`字體大小調整為: ${this.currentFontSize}px`);
         
-        // 再次確保滾動到位
-        setTimeout(() => {
-            this.forceScrollToBottom(this.originalContent);
-            this.forceScrollToBottom(this.translatedContent);
-        }, 100);
+        // 簡報模式不需要滾動，文字會自動管理長度
     }
 
     toggleControls() {

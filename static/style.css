@@ -347,43 +347,25 @@ select:focus {
     font-size: 28px;
     line-height: 1.6;
     color: #e8e8e8;
-    word-wrap: break-word;
     text-align: left;
-    overflow-y: auto;
+    overflow: hidden;
     padding: 20px 40px;
     display: flex;
     flex-direction: column;
+    justify-content: center;
     align-items: flex-start;
+    word-wrap: break-word;
 }
 
 .text-wrapper {
     width: 100%;
-    min-height: 100%;
-    display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
+    height: 100%;
+    display: block;
     line-height: 1.8;
-    word-break: break-word;
+    word-wrap: break-word;
+    overflow: hidden;
 }
 
-.presentation-content::-webkit-scrollbar {
-    width: 8px;
-}
-
-.presentation-content::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 4px;
-}
-
-.presentation-content::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.4);
-    border-radius: 4px;
-    transition: background 0.3s ease;
-}
-
-.presentation-content::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.6);
-}
 
 .original-pane {
     background: #1a2332;
@@ -393,6 +375,10 @@ select:focus {
 
 .original-pane h3 {
     color: #28a745;
+}
+
+.original-pane .presentation-content {
+    word-wrap: break-word;
 }
 
 .translated-pane {
@@ -406,6 +392,7 @@ select:focus {
 
 .translated-pane .presentation-content {
     color: #4facfe;
+    word-wrap: break-word;
 }
 
 .settings-toggle {
@@ -598,7 +585,7 @@ select:focus {
 
 @keyframes blink {
     0%, 50% { opacity: 1; }
-    51%, 100% { opacity: 0.3; }
+    51%, 100% { opacity: 0; }
 }
 
 .transcript-display::-webkit-scrollbar {
