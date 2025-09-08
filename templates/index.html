@@ -9,6 +9,25 @@
 <body>
     <button class="settings-toggle" id="settingsToggle">⚙️ 設定</button>
     
+    <!-- 簡報模式控制面板 -->
+    <div class="presentation-controls" id="presentationControls" style="display: none;">
+        <!-- 收縮時顯示的按鈕 -->
+        <div class="control-toggle" id="controlToggle">
+            <span class="toggle-icon">⚙️</span>
+        </div>
+        
+        <!-- 展開時顯示的完整控制項 -->
+        <div class="controls-content" id="controlsContent">
+            <div class="font-size-control">
+                <button class="control-btn font-btn" id="fontDecrease">A-</button>
+                <span id="fontSizeDisplay">28px</span>
+                <button class="control-btn font-btn" id="fontIncrease">A+</button>
+            </div>
+            <div class="control-divider"></div>
+            <button class="control-btn exit-btn" id="presentationExitBtn">🚪 退出</button>
+        </div>
+    </div>
+    
     <div class="container" id="container">
         <div class="header" id="header">
             <h1>🗣️ 即時翻譯系統</h1>
@@ -26,6 +45,13 @@
                         <label>
                             <input type="checkbox" id="advancedNoiseSuppression" checked>
                             噪音抑制 (適用於吵雜環境)
+                        </label>
+                    </div>
+                    
+                    <div class="setting-item">
+                        <label>
+                            <input type="checkbox" id="incrementalTranslation" checked>
+                            即時增量翻譯 (邊說邊翻譯)
                         </label>
                     </div>
                     
@@ -97,7 +123,16 @@
                 </div>
                 
                 <div class="current-speaking" id="currentSpeaking">
-                    <div class="live-indicator">🔴 LIVE</div>
+                    <div class="speech-status">
+                        <div class="live-indicator">🔴 LIVE</div>
+                        <div class="confidence-indicator" id="confidenceIndicator">
+                            <span class="confidence-label">識別品質:</span>
+                            <div class="confidence-bar">
+                                <div class="confidence-fill" id="confidenceFill"></div>
+                            </div>
+                            <span class="confidence-text" id="confidenceText">--</span>
+                        </div>
+                    </div>
                     <div class="current-text" id="currentText"></div>
                 </div>
             </div>
