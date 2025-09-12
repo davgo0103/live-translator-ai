@@ -12,13 +12,14 @@ class WebSpeechRecognition {
         this.recognitionTimeout = null;
         this.recognitionRetryCount = 0;
         this.maxRecognitionRetries = 999;
-        this.recognitionRestartDelay = 100;
+        this.recognitionRestartDelay = 500; // 增加延遲到 500ms
         this.isRecognitionActive = false;
         this.lastSpeechTime = 0;
         this.silenceTimeout = null;
         this.recognitionStartTime = 0;
         this.meetingKeepAlive = null;
         this.recognitionKeepAliveInterval = null;
+        this.isRestarting = false; // 新增重啟狀態標記
         
         // 回調函數
         this.onResult = null;
@@ -118,13 +119,17 @@ class WebSpeechRecognition {
             
             console.log(`語音識別會話結束，持續時間: ${sessionDuration}ms`);
 
-            if (this.isRecording && this.continuousMode) {
+            // 檢查是否需要重啟（避免重複重啟）
+            if (this.isRecording && this.continuousMode && !this.isRestarting) {
                 this.recognitionRetryCount++;
                 
                 if (this.recognitionRetryCount <= this.maxRecognitionRetries) {
                     console.log(`準備重啟語音識別... (${this.recognitionRetryCount}/${this.maxRecognitionRetries})`);
+                    this.isRestarting = true; // 設置重啟標記
+                    
                     setTimeout(() => {
-                        if (this.isRecording) {
+                        if (this.isRecording && this.isRestarting) {
+                            this.isRestarting = false; // 清除重啟標記
                             this.startRecognition();
                         }
                     }, this.recognitionRestartDelay);
@@ -134,6 +139,7 @@ class WebSpeechRecognition {
                 }
             } else {
                 this.recognitionRetryCount = 0;
+                this.isRestarting = false; // 清除重啟標記
             }
             
             if (this.onEnd) {
@@ -165,15 +171,23 @@ class WebSpeechRecognition {
                 this.onError(message);
             }
             
-            // 對於某些錯誤，嘗試重啟
-            if (['network', 'aborted', 'audio-capture'].includes(event.error)) {
-                if (this.isRecording && this.recognitionRetryCount < this.maxRecognitionRetries) {
+            // 對於某些錯誤，嘗試重啟（避免與 onend 的重啟衝突）
+            if (['network', 'audio-capture'].includes(event.error)) {
+                if (this.isRecording && this.recognitionRetryCount < this.maxRecognitionRetries && !this.isRestarting) {
+                    console.log(`因 ${event.error} 錯誤準備重啟語音識別...`);
+                    this.isRestarting = true;
+                    
                     setTimeout(() => {
-                        if (this.isRecording) {
+                        if (this.isRecording && this.isRestarting) {
+                            this.isRestarting = false;
                             this.startRecognition();
                         }
                     }, 1000);
                 }
+            } else if (event.error === 'aborted') {
+                // aborted 錯誤通常由重啟引起，不需要額外重啟
+                console.log('語音識別被中止，這通常是重啟過程的正常現象');
+                this.isRestarting = false; // 清除重啟標記，避免卡住
             }
         };
 
@@ -248,11 +262,14 @@ class WebSpeechRecognition {
         if (!this.recognition || !this.continuousMode) return false;
 
         try {
-            if (this.isRecognitionActive) {
+            // 檢查是否已經在重啟中，避免重複啟動
+            if (this.isRecognitionActive && !this.isRestarting) {
+                console.log('語音識別已啟動，先停止現有識別...');
                 this.recognition.stop();
-                await new Promise(resolve => setTimeout(resolve, 100));
+                await new Promise(resolve => setTimeout(resolve, 200));
             }
 
+            console.log('正在啟動語音識別...');
             this.recognition.start();
             this.isRecording = true;
             
@@ -263,6 +280,7 @@ class WebSpeechRecognition {
             return true;
         } catch (error) {
             console.error('無法啟動語音識別:', error);
+            this.isRestarting = false; // 啟動失敗時清除重啟標記
             if (this.onError) {
                 this.onError(error.message);
             }
@@ -272,11 +290,14 @@ class WebSpeechRecognition {
 
     // 停止識別
     stopRecording() {
+        console.log('停止語音識別...');
+        
         if (this.recognition && this.isRecognitionActive) {
             this.recognition.stop();
         }
 
         this.isRecording = false;
+        this.isRestarting = false; // 清除重啟標記
         this.stopKeepAlive();
         this.recognitionRetryCount = 0;
         
@@ -347,6 +368,7 @@ class WebSpeechRecognition {
         return {
             isRecording: this.isRecording,
             isActive: this.isRecognitionActive,
+            isRestarting: this.isRestarting,
             language: this.recognition ? this.recognition.lang : 'unknown',
             retryCount: this.recognitionRetryCount,
             confidenceThreshold: this.confidenceThreshold
