@@ -47,8 +47,18 @@ def transcribe_audio():
         # 設置 OpenAI API key
         openai.api_key = api_key
         
+        # 根據文件類型決定擴展名
+        file_extension = '.webm'  # 預設
+        if audio_file.filename:
+            if audio_file.filename.endswith('.mp4'):
+                file_extension = '.mp4'
+            elif audio_file.filename.endswith('.wav'):
+                file_extension = '.wav'
+            elif audio_file.filename.endswith('.m4a'):
+                file_extension = '.m4a'
+        
         # 創建臨時文件保存音頻
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.webm') as temp_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
             audio_file.save(temp_file.name)
             temp_file_path = temp_file.name
         
