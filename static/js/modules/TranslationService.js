@@ -60,33 +60,32 @@ class TranslationService {
         this.activeTranslationRequests++;
 
         try {
-            const prompt = this.buildTranslationPrompt(text, targetLanguage, sourceLanguage);
-            
-            const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            // 使用本地翻譯端點而非直接調用 OpenAI API
+            const response = await fetch('/translate', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.apiKey}`
+                    'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({
-                    model: 'gpt-4o-mini',
-                    messages: [{ role: 'user', content: prompt }],
-                    max_tokens: 1000,
-                    temperature: 0.3
+                    text: text,
+                    target_language: targetLanguage,
+                    source_language: sourceLanguage,
+                    api_key: this.apiKey
                 })
             });
 
             if (!response.ok) {
-                throw new Error(`API 錯誤: ${response.status} ${response.statusText}`);
+                throw new Error(`翻譯服務錯誤: ${response.status} ${response.statusText}`);
             }
 
             const data = await response.json();
             
-            if (!data.choices || !data.choices[0] || !data.choices[0].message) {
-                throw new Error('API 響應格式錯誤');
+            // 檢查本地 API 的響應格式
+            if (!data.success) {
+                throw new Error(data.error || '翻譯失敗');
             }
 
-            const translation = data.choices[0].message.content.trim();
+            const translation = data.translation.trim();
             
             // 儲存到緩存
             this.translationCache.set(cacheKey, translation);
