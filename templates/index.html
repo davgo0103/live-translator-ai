@@ -40,7 +40,21 @@
                 <input type="password" id="apiKey" placeholder="請輸入您的 OpenAI API Key">
                 
                 <div class="noise-config">
-                    <h4>🎤 語音優化</h4>
+                    <h4>🎤 語音識別設定</h4>
+                    
+                    <div class="setting-item">
+                        <label>
+                            <span>🔧 識別引擎:</span>
+                            <select id="recognitionEngine" style="margin-left: 10px; padding: 5px;">
+                                <option value="webspeech">Web Speech API (瀏覽器內建)</option>
+                                <option value="whisper">OpenAI Whisper (更準確)</option>
+                            </select>
+                        </label>
+                        <small>
+                            Whisper 需要 OpenAI API Key，準確度更高但會消耗額外費用<br>
+                            <strong>遠距離優化：</strong>自動增益、噪音抑制、1.5秒快速識別、音量檢測
+                        </small>
+                    </div>
                     <div class="setting-item">
                         <label>
                             <input type="checkbox" id="advancedNoiseSuppression" checked>

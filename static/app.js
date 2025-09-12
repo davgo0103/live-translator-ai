@@ -35,6 +35,23 @@ class RealTimeTranslator {
         this.pendingOriginalText = ''; // 待處理的原文
         this.pendingTranslationText = ''; // 待處理的翻譯文字
         
+        // Whisper 相關屬性
+        this.currentRecognitionEngine = 'webspeech'; // 'webspeech' 或 'whisper'
+        this.mediaRecorder = null;
+        this.audioChunks = [];
+        this.whisperRecordingInterval = null;
+        this.whisperRecordingDuration = 1500; // 改為1.5秒片段，提高即時性
+        this.isWhisperRecording = false;
+        this.audioStream = null;
+        this.audioContext = null;
+        this.analyser = null;
+        this.lastAudioLevel = 0;
+        this.silenceThreshold = 30; // 音量低於此值視為靜音
+        this.whisperResponseTimes = []; // 記錄回應時間
+        this.whisperAccumulatedText = ''; // Whisper累積文字
+        this.lastWhisperText = ''; // 上一次的Whisper結果
+        this.whisperSentenceBuffer = []; // Whisper句子緩衝區
+        
         this.initElements();
         this.setupNoiseControlListeners();
         this.initializeConfidenceDisplay();
@@ -233,7 +250,16 @@ class RealTimeTranslator {
 
     // 平滑完成臨時翻譯 - 解決快速語音時翻譯消失的問題
     completeInterimTranslation(finalText) {
-        if (!this.isPresentationMode || !this.translatedWrapper) return;
+        // 簡報模式的處理
+        if (this.isPresentationMode && this.translatedWrapper) {
+            this.completeInterimTranslationPresentationMode(finalText);
+        }
+        
+        // 正常模式的處理 - 清理臨時翻譯標記
+        this.completeInterimTranslationNormalMode(finalText);
+    }
+    
+    completeInterimTranslationPresentationMode(finalText) {
         
         // 防止重複處理
         if (this.isCompletingTranslation) {
@@ -276,6 +302,25 @@ class RealTimeTranslator {
             this.currentIncrementalTranslation = '';
             this.isCompletingTranslation = false;
         }
+    }
+    
+    completeInterimTranslationNormalMode(finalText) {
+        // 在正常模式下清理臨時翻譯標記
+        if (this.currentText) {
+            const currentTextContent = this.currentText.innerHTML;
+            if (currentTextContent.includes('incremental-translation')) {
+                // 移除增量翻譯的 span 標籤，但保留最終翻譯結果
+                let cleanedContent = currentTextContent.replace(
+                    /<span class="incremental-translation"[^>]*>\[.*?\]<\/span>/g, 
+                    finalText && finalText.trim() ? `[${finalText}]` : ''
+                );
+                this.safeSetHTML(this.currentText, cleanedContent.trim());
+                console.log('正常模式：清理臨時翻譯標記，保留最終結果');
+            }
+        }
+        
+        // 清除增量翻譯狀態
+        this.currentIncrementalTranslation = '';
     }
 
     // 多語言支援：根據目標語言返回適當的狀態文字
@@ -417,6 +462,9 @@ class RealTimeTranslator {
         this.confidenceThreshold = document.getElementById('confidenceThreshold');
         this.confidenceValue = document.getElementById('confidenceValue');
         this.advancedNoiseSuppression = document.getElementById('advancedNoiseSuppression');
+        
+        // 語音識別引擎選擇器
+        this.recognitionEngine = document.getElementById('recognitionEngine');
         this.incrementalTranslation = document.getElementById('incrementalTranslation');
         
         // 置信度指示器
@@ -768,6 +816,10 @@ class RealTimeTranslator {
             this.secureSetApiKey(this.apiKey);
         });
 
+        this.recognitionEngine.addEventListener('change', () => {
+            this.handleRecognitionEngineChange();
+        });
+
         this.clearBtn.addEventListener('click', () => {
             this.clearTranscript();
         });
@@ -904,24 +956,29 @@ class RealTimeTranslator {
         });
     }
 
-    toggleRecording() {
+    async toggleRecording() {
         if (!this.apiKey) {
             alert('請先輸入 OpenAI API Key');
             this.apiKeyInput.focus();
             return;
         }
 
-        if (!this.recognition) {
-            alert('語音識別功能不可用');
-            return;
-        }
-
-        this.continuousMode = !this.continuousMode;
-        
-        if (this.continuousMode) {
-            this.startContinuousRecording();
-        } else {
-            this.stopContinuousRecording();
+        // 根據選擇的引擎進行不同的檢查
+        if (this.currentRecognitionEngine === 'webspeech') {
+            if (!this.recognition) {
+                alert('語音識別功能不可用');
+                return;
+            }
+            this.continuousMode = !this.continuousMode;
+            
+            if (this.continuousMode) {
+                this.startContinuousRecording();
+            } else {
+                this.stopRecording();
+            }
+        } else if (this.currentRecognitionEngine === 'whisper') {
+            // Whisper 模式
+            await this.toggleWhisperRecording();
         }
     }
 
@@ -1021,8 +1078,8 @@ class RealTimeTranslator {
             return;
         }
         
-        // 清理之前的臨時翻譯狀態
-        this.currentIncrementalTranslation = '';
+        // 不要在重啟時清理臨時翻譯狀態，可能會干擾正在進行的翻譯
+        // this.currentIncrementalTranslation = '';
         
         try {
             console.log('正在啟動語音識別...');
@@ -1059,7 +1116,7 @@ class RealTimeTranslator {
         }
     }
 
-    addTranscriptItem(text) {
+    addTranscriptItem(text, customId = null) {
         const timestamp = new Date().toLocaleTimeString('zh-TW', { 
             hour12: false,
             hour: '2-digit',
@@ -1068,7 +1125,7 @@ class RealTimeTranslator {
         });
         
         const transcriptItem = {
-            id: this.currentTranscriptId++,
+            id: customId || this.currentTranscriptId++,
             timestamp: timestamp,
             sourceText: text,
             translatedText: this.getStatusText('translating')
@@ -1305,15 +1362,15 @@ class RealTimeTranslator {
             try {
                 await this.addPunctuationAndTranslate(finalTranscript, this.currentTranscriptId);
                 
-                // 翻譯完成後的清理，給 completeInterimTranslation 時間完成
+                // 翻譯完成後只清理翻譯相關狀態，不清理句子邊界檢測狀態
                 this.incrementalTranslationCleanupTimer = setTimeout(() => {
                     if (!this.isCompletingTranslation) {
-                        this.clearIncrementalTranslation();
+                        this.clearIncrementalTranslationOnly();
                     }
                 }, 350); // 略小於 completeInterimTranslation 的 300ms
             } catch (error) {
                 console.error('翻譯錯誤:', error);
-                this.clearIncrementalTranslation();
+                this.clearIncrementalTranslationOnly();
             }
             
         } else if (interimTranscript.trim() && this.incrementalTranslation.checked) {
@@ -1493,12 +1550,14 @@ class RealTimeTranslator {
         if (completedSentences) {
             console.log(`⏳ 完整句子: "${completedSentences}" | 剩餘文字: "${remainingText}"`);
             
-            // 清理當前臨時翻譯狀態，避免與正式翻譯衝突
-            this.currentIncrementalTranslation = '';
+            // 不要立即清空臨時翻譯，保持它直到正式翻譯完成
+            // 讓 completeInterimTranslation 函數來處理清理
             
             // 將完整句子轉為正式翻譯記錄（異步處理）
             this.processCompletedSentence(completedSentences).catch(error => {
                 console.error('處理完整句子錯誤:', error);
+                // 只有在錯誤時才清空臨時翻譯
+                this.currentIncrementalTranslation = '';
             });
             
             // 更新待處理文字為剩餘部分
@@ -1732,6 +1791,51 @@ class RealTimeTranslator {
             this.currentIncrementalTranslation = '';
         }
     }
+    
+    clearIncrementalTranslationOnly() {
+        // 只清理翻譯相關的狀態，保留句子邊界檢測狀態和臨時翻譯內容
+        if (this.translationUpdateTimer) {
+            clearTimeout(this.translationUpdateTimer);
+            this.translationUpdateTimer = null;
+        }
+        
+        // 清除擱置的翻譯完成計時器
+        if (this.pendingTranslationTimeout) {
+            clearTimeout(this.pendingTranslationTimeout);
+            this.pendingTranslationTimeout = null;
+        }
+        
+        // 清除增量翻譯清理計時器
+        if (this.incrementalTranslationCleanupTimer) {
+            clearTimeout(this.incrementalTranslationCleanupTimer);
+            this.incrementalTranslationCleanupTimer = null;
+        }
+        
+        // 重置翻譯完成狀態
+        this.isCompletingTranslation = false;
+        
+        // 清理當前顯示中的增量翻譯標記
+        const currentTextContent = this.currentText.innerHTML;
+        if (currentTextContent.includes('incremental-translation')) {
+            // 移除增量翻譯的 span 標籤
+            this.safeSetHTML(this.currentText, currentTextContent.replace(
+                /<span class="incremental-translation"[^>]*>\[.*?\]<\/span>/g, 
+                ''
+            ).trim());
+        }
+        
+        // 簡報模式中重置臨時翻譯為等待狀態，而不是完全清除
+        if (this.isPresentationMode && this.translatedWrapper) {
+            const interimSpan = this.translatedWrapper.querySelector('#interim-translation');
+            if (interimSpan) {
+                // 重置為翻譯中狀態，保持容器存在
+                interimSpan.textContent = this.getStatusText('translating');
+                console.log('重置臨時翻譯為等待狀態');
+            }
+            // 清除舊的增量翻譯狀態
+            this.currentIncrementalTranslation = '';
+        }
+    }
 
     tryNextLanguage() {
         if (this.sourceLanguage.value === 'auto') {
@@ -1804,7 +1908,7 @@ class RealTimeTranslator {
                 const cleanTranslation = parsed.translation ? parsed.translation.replace(/\n+/g, ' ').replace(/\s+/g, ' ') : '';
                 
                 // 添加有標點符號的原文
-                this.addTranscriptItem(cleanOriginal);
+                this.addTranscriptItem(cleanOriginal, transcriptId);
                 // 更新翻譯
                 this.updateTranscriptTranslation(transcriptId, cleanTranslation);
                 
@@ -1816,7 +1920,7 @@ class RealTimeTranslator {
                 // 如果JSON解析失敗，使用原本邏輯
                 console.log('JSON解析失敗，使用備用方法');
                 
-                this.addTranscriptItem(text);
+                this.addTranscriptItem(text, transcriptId);
                 this.translateText(text, transcriptId);
                 
                 // 簡報模式：即使是備用方法也要平滑完成
@@ -1829,7 +1933,7 @@ class RealTimeTranslator {
             console.error('處理錯誤:', error);
             
             // 錯誤時使用原本邏輯
-            this.addTranscriptItem(text);
+            this.addTranscriptItem(text, transcriptId);
             this.updateTranscriptTranslation(transcriptId, `處理失敗: ${error.message}`);
             
             // 簡報模式：錯誤時也要清理臨時狀態
@@ -2001,7 +2105,6 @@ class RealTimeTranslator {
             const lastPart = this.currentOriginalText.slice(-newText.length - 10);
             if (!lastPart.includes(newText)) {
                 this.currentOriginalText += newText + ' ';
-                // 不要直接添加原文到翻譯流！翻譯流應該只由 updatePresentationTranslationFlow 管理
                 console.log('原文已添加到即時顯示:', newText);
             }
         }
@@ -2121,22 +2224,31 @@ class RealTimeTranslator {
         
         console.log(`更新翻譯流: ID ${translationId}, 翻譯: "${translation}"`);
         
-        // 完全重新構建翻譯文字流，確保沒有重複
-        let rebuiltTranslatedText = '';
-        let processedItems = 0;
-        
-        for (const item of this.transcriptHistory) {
-            if (item.translatedText && item.translatedText !== this.getStatusText('translating')) {
-                // 只添加已完成的翻譯，跳過"翻譯中..."狀態
-                rebuiltTranslatedText += item.translatedText + ' ';
-                processedItems++;
+        // 找到對應的歷史項目
+        const historyItem = this.transcriptHistory.find(item => item.id == translationId);
+        if (historyItem && translation && translation !== this.getStatusText('translating')) {
+            // 檢查翻譯是否是新的，避免重複添加
+            if (!this.currentTranslatedText.includes(translation)) {
+                this.currentTranslatedText += translation + ' ';
+                console.log(`新翻譯已添加到連續流: "${translation}"`);
             }
+        } else {
+            // 如果找不到對應項目，重新構建翻譯文字流作為備用
+            let rebuiltTranslatedText = '';
+            let processedItems = 0;
+            
+            for (const item of this.transcriptHistory) {
+                if (item.translatedText && item.translatedText !== this.getStatusText('translating')) {
+                    // 只添加已完成的翻譯，跳過"翻譯中..."狀態
+                    rebuiltTranslatedText += item.translatedText + ' ';
+                    processedItems++;
+                }
+            }
+            
+            // 更新累積的翻譯文字 - 使用重建的文字流
+            this.currentTranslatedText = rebuiltTranslatedText;
+            console.log(`翻譯流重建完成: ${processedItems}個項目`);
         }
-        
-        // 更新累積的翻譯文字 - 使用重建的文字流
-        this.currentTranslatedText = rebuiltTranslatedText;
-        
-        console.log(`翻譯流重建完成: ${processedItems}個項目, 總長度: ${this.currentTranslatedText.length}`);
         
         // 管理文字長度（適合自然換行顯示）
         this.managePresentationTextLength();
@@ -2327,6 +2439,487 @@ class RealTimeTranslator {
             this.autoCollapseTimer = setTimeout(() => {
                 this.collapseControls();
             }, 5000);
+        }
+    }
+
+    // 處理語音識別引擎變更
+    handleRecognitionEngineChange() {
+        const selectedEngine = this.recognitionEngine.value;
+        this.currentRecognitionEngine = selectedEngine;
+        
+        // 停止現有的識別
+        if (this.isRecording) {
+            this.stopRecording();
+        }
+        
+        console.log(`切換語音識別引擎至: ${selectedEngine}`);
+        
+        // 根據選擇的引擎更新UI提示
+        this.updateEngineStatus(selectedEngine);
+    }
+    
+    // 更新引擎狀態提示
+    updateEngineStatus(engine) {
+        if (engine === 'whisper') {
+            this.currentText.innerHTML = '<div style="color: #17a2b8;">📡 Whisper模式：點擊開始錄音，每1.5秒上傳一次進行識別</div>';
+            this.recordBtn.textContent = '🎤 開始 Whisper 錄音';
+            this.recordBtn.style.background = 'linear-gradient(135deg, #28a745, #20c997)';
+        } else {
+            this.currentText.innerHTML = '<div style="color: #28a745;">🎤 Web Speech模式：瀏覽器即時語音識別</div>';
+            this.recordBtn.textContent = '🎤 開始會議模式';
+            this.recordBtn.style.background = 'linear-gradient(135deg, #28a745, #20c997)';
+        }
+    }
+    
+    // 初始化Whisper錄音
+    async initWhisperRecording() {
+        try {
+            // 增強麥克風設定，專為遠距離錄音優化
+            this.audioStream = await navigator.mediaDevices.getUserMedia({ 
+                audio: {
+                    sampleRate: 16000,
+                    channelCount: 1,
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true, // 自動增益控制
+                    googEchoCancellation: true,
+                    googAutoGainControl: true,
+                    googNoiseSuppression: true,
+                    googHighpassFilter: true,
+                    googAudioMirroring: false
+                } 
+            });
+            
+            // 初始化音頻分析器用於音量檢測
+            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            this.analyser = this.audioContext.createAnalyser();
+            const source = this.audioContext.createMediaStreamSource(this.audioStream);
+            source.connect(this.analyser);
+            
+            this.analyser.fftSize = 256;
+            this.dataArray = new Uint8Array(this.analyser.frequencyBinCount);
+            
+            this.mediaRecorder = new MediaRecorder(this.audioStream, {
+                mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
+            });
+            
+            this.audioChunks = [];
+            
+            this.mediaRecorder.ondataavailable = (event) => {
+                if (event.data.size > 0) {
+                    this.audioChunks.push(event.data);
+                }
+            };
+            
+            this.mediaRecorder.onstop = () => {
+                this.processWhisperAudio();
+            };
+            
+            return true;
+        } catch (error) {
+            console.error('無法初始化Whisper錄音:', error);
+            alert('無法存取麥克風，請檢查權限設定');
+            return false;
+        }
+    }
+    
+    // 計算當前音量等級
+    getAudioLevel() {
+        if (!this.analyser) return 0;
+        
+        this.analyser.getByteFrequencyData(this.dataArray);
+        let sum = 0;
+        for (let i = 0; i < this.dataArray.length; i++) {
+            sum += this.dataArray[i];
+        }
+        return sum / this.dataArray.length;
+    }
+    
+    // 檢查是否有足夠的音頻活動
+    hasAudioActivity() {
+        const currentLevel = this.getAudioLevel();
+        this.lastAudioLevel = currentLevel;
+        
+        // 更新音量指示器
+        this.updateAudioLevelIndicator(currentLevel);
+        
+        return currentLevel > this.silenceThreshold;
+    }
+    
+    // 更新音量指示器
+    updateAudioLevelIndicator(level) {
+        const percentage = Math.min(100, (level / 100) * 100);
+        const color = level > this.silenceThreshold ? '#28a745' : '#dc3545';
+        
+        this.currentText.innerHTML = `
+            <div style="color: #17a2b8;">📡 Whisper模式 - 音量: ${Math.round(level)}
+                <div style="background: #f0f0f0; height: 8px; border-radius: 4px; margin: 5px 0;">
+                    <div style="background: ${color}; height: 100%; width: ${percentage}%; border-radius: 4px; transition: all 0.1s;"></div>
+                </div>
+            </div>
+        `;
+    }
+    
+    // 開始Whisper錄音
+    async startWhisperRecording() {
+        // 檢查 API Key
+        if (!this.apiKey) {
+            alert('請先輸入 OpenAI API Key');
+            return false;
+        }
+        
+        if (!this.mediaRecorder) {
+            const success = await this.initWhisperRecording();
+            if (!success) {
+                alert('無法錄音：初始化失敗');
+                return false;
+            }
+        }
+        
+        this.isWhisperRecording = true;
+        this.mediaRecorder.start();
+        
+        // 設定定期錄音片段
+        this.whisperRecordingInterval = setInterval(() => {
+            if (this.isWhisperRecording && this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                this.mediaRecorder.stop();
+                setTimeout(() => {
+                    if (this.isWhisperRecording) {
+                        this.mediaRecorder.start();
+                    }
+                }, 100);
+            }
+        }, this.whisperRecordingDuration);
+        
+        console.log('Whisper 錄音開始');
+        return true;
+    }
+    
+    // 停止Whisper錄音
+    stopWhisperRecording() {
+        this.isWhisperRecording = false;
+        
+        if (this.whisperRecordingInterval) {
+            clearInterval(this.whisperRecordingInterval);
+            this.whisperRecordingInterval = null;
+        }
+        
+        if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+            this.mediaRecorder.stop();
+        }
+        
+        if (this.audioStream) {
+            this.audioStream.getTracks().forEach(track => track.stop());
+            this.audioStream = null;
+        }
+        
+        // 停止錄音時處理最後累積的句子
+        if (this.whisperAccumulatedText.length > 5) {
+            console.log('錄音停止，處理最後的句子:', this.whisperAccumulatedText);
+            this.processPendingSentence();
+        }
+        
+        // 清理超時器
+        if (this.sentenceTimeout) {
+            clearTimeout(this.sentenceTimeout);
+            this.sentenceTimeout = null;
+        }
+        
+        console.log('Whisper 錄音停止');
+    }
+    
+    // 處理Whisper音頻並上傳
+    async processWhisperAudio() {
+        if (this.audioChunks.length === 0) return;
+        
+        // 檢查最近是否有音頻活動
+        const hasActivity = this.hasAudioActivity();
+        
+        const audioBlob = new Blob(this.audioChunks, { 
+            type: this.mediaRecorder.mimeType || 'audio/webm' 
+        });
+        
+        // 檢查音頻大小，避免上傳過小的片段
+        if (audioBlob.size < 1000) {
+            this.audioChunks = [];
+            console.log('音頻片段太小，跳過上傳');
+            return;
+        }
+        
+        // 如果沒有音頻活動（靜音片段），跳過上傳
+        if (!hasActivity && this.lastAudioLevel < this.silenceThreshold) {
+            this.audioChunks = [];
+            console.log(`音量過低 (${Math.round(this.lastAudioLevel)})，跳過靜音片段`);
+            return;
+        }
+        
+        this.audioChunks = [];
+        
+        try {
+            const startTime = Date.now();
+            await this.uploadToWhisper(audioBlob);
+            const responseTime = Date.now() - startTime;
+            this.whisperResponseTimes.push(responseTime);
+            
+            // 保持最近10次的回應時間記錄
+            if (this.whisperResponseTimes.length > 10) {
+                this.whisperResponseTimes.shift();
+            }
+            
+            console.log(`Whisper 回應時間: ${responseTime}ms`);
+        } catch (error) {
+            console.error('Whisper 上傳失敗:', error);
+        }
+    }
+    
+    // 上傳音頻到Whisper API
+    async uploadToWhisper(audioBlob) {
+        if (!this.apiKey) {
+            console.warn('未設定API Key，跳過Whisper轉錄');
+            return;
+        }
+        
+        const formData = new FormData();
+        formData.append('audio', audioBlob, 'audio.webm');
+        formData.append('api_key', this.apiKey);
+        formData.append('language', this.sourceLanguage.value);
+        
+        try {
+            const response = await fetch('/transcribe', {
+                method: 'POST',
+                body: formData
+            });
+            
+            const result = await response.json();
+            
+            if (result.success && result.text && result.text.trim()) {
+                // 處理識別結果
+                this.handleWhisperResult(result.text.trim());
+            } else if (result.error) {
+                console.error('Whisper API 錯誤:', result.error);
+                this.currentText.innerHTML = `<div style="color: #dc3545;">❌ ${result.error}</div>`;
+            }
+        } catch (error) {
+            console.error('上傳到Whisper失敗:', error);
+            this.currentText.innerHTML = '<div style="color: #dc3545;">❌ 網路錯誤，請檢查連線</div>';
+        }
+    }
+    
+    // 處理Whisper識別結果
+    handleWhisperResult(text) {
+        if (!text || text.length < 2) return;
+        
+        // 清理和標準化文字
+        text = text.trim();
+        
+        // 智能累積文字：檢查是否是延續上一句還是新句子
+        const processedText = this.accumulateWhisperText(text);
+        
+        // 計算平均回應時間
+        const avgResponseTime = this.whisperResponseTimes.length > 0 
+            ? Math.round(this.whisperResponseTimes.reduce((a, b) => a + b, 0) / this.whisperResponseTimes.length)
+            : 0;
+        
+        // 顯示累積的文字和性能資訊
+        this.currentText.innerHTML = `
+            <div style="color: #17a2b8;">
+                🎤 ${processedText}
+                <div style="font-size: 12px; color: #6c757d; margin-top: 5px;">
+                    回應時間: ${avgResponseTime}ms | 音量: ${Math.round(this.lastAudioLevel)} | 累積: ${this.whisperAccumulatedText.length}字
+                </div>
+            </div>
+        `;
+        
+        // 檢查是否形成完整句子
+        this.checkForCompleteSentence(processedText);
+    }
+    
+    // 智能累積Whisper文字
+    accumulateWhisperText(newText) {
+        // 檢查新文字是否與上次結果有重疊（Whisper的連續性特征）
+        if (this.lastWhisperText && newText.includes(this.lastWhisperText)) {
+            // 如果新文字包含舊文字，說明是延續
+            this.whisperAccumulatedText = newText;
+        } else if (this.lastWhisperText && this.lastWhisperText.includes(newText)) {
+            // 如果舊文字包含新文字，保持舊文字（避免退化）
+            return this.whisperAccumulatedText;
+        } else {
+            // 檢查是否是自然延續（最後幾個字相同）
+            const similarity = this.calculateTextSimilarity(this.lastWhisperText, newText);
+            if (similarity > 0.5) {
+                // 有重疊，合併文字
+                const merged = this.mergeOverlappingText(this.whisperAccumulatedText, newText);
+                this.whisperAccumulatedText = merged;
+            } else {
+                // 完全新的文字，可能是新句子開始
+                if (this.whisperAccumulatedText.length > 0) {
+                    // 先處理之前累積的句子
+                    this.processPendingSentence();
+                }
+                this.whisperAccumulatedText = newText;
+            }
+        }
+        
+        this.lastWhisperText = newText;
+        return this.whisperAccumulatedText;
+    }
+    
+    // 計算兩段文字的相似度
+    calculateTextSimilarity(text1, text2) {
+        if (!text1 || !text2) return 0;
+        
+        const words1 = text1.toLowerCase().split(/\s+/);
+        const words2 = text2.toLowerCase().split(/\s+/);
+        
+        let commonWords = 0;
+        const maxLength = Math.max(words1.length, words2.length);
+        
+        words1.forEach(word => {
+            if (words2.includes(word)) commonWords++;
+        });
+        
+        return commonWords / maxLength;
+    }
+    
+    // 合併有重疊的文字
+    mergeOverlappingText(oldText, newText) {
+        const oldWords = oldText.split(/\s+/);
+        const newWords = newText.split(/\s+/);
+        
+        // 找到最佳重疊點
+        let bestOverlap = 0;
+        let bestPosition = oldWords.length;
+        
+        for (let i = 1; i <= Math.min(oldWords.length, newWords.length); i++) {
+            const oldSuffix = oldWords.slice(-i).join(' ');
+            const newPrefix = newWords.slice(0, i).join(' ');
+            
+            if (oldSuffix === newPrefix) {
+                bestOverlap = i;
+                bestPosition = oldWords.length - i;
+            }
+        }
+        
+        if (bestOverlap > 0) {
+            // 有重疊，合併
+            return oldWords.slice(0, bestPosition).concat(newWords).join(' ');
+        } else {
+            // 沒有重疊，直接連接
+            return oldText + ' ' + newText;
+        }
+    }
+    
+    // 檢查是否形成完整句子
+    checkForCompleteSentence(text) {
+        // 句子結尾標點符號
+        const sentenceEnders = /[.!?。！？]/;
+        
+        // 如果包含句尾標點，或者文字長度足夠長
+        if (sentenceEnders.test(text) || text.length > 50) {
+            this.processPendingSentence();
+        }
+        
+        // 如果長時間沒有新輸入，也處理當前句子
+        clearTimeout(this.sentenceTimeout);
+        this.sentenceTimeout = setTimeout(() => {
+            if (this.whisperAccumulatedText.length > 10) {
+                this.processPendingSentence();
+            }
+        }, 3000); // 3秒沒有新輸入就處理
+    }
+    
+    // 處理待處理的句子
+    processPendingSentence() {
+        if (this.whisperAccumulatedText && this.whisperAccumulatedText.length > 5) {
+            console.log('處理完整句子:', this.whisperAccumulatedText);
+            
+            // 模擬Web Speech API的結果事件格式
+            const mockEvent = {
+                results: [{
+                    0: { 
+                        transcript: this.whisperAccumulatedText,
+                        confidence: 0.9 
+                    },
+                    isFinal: true
+                }],
+                resultIndex: 0
+            };
+            
+            // 使用現有的onresult處理邏輯進行翻譯
+            this.handleSpeechResult(mockEvent);
+            
+            // 清空累積文字，準備下一句
+            this.whisperAccumulatedText = '';
+            this.lastWhisperText = '';
+        }
+    }
+    
+    
+    // 新的Whisper切換錄音方法
+    async toggleWhisperRecording() {
+        if (!this.isWhisperRecording) {
+            const success = await this.startWhisperRecording();
+            if (success !== false) {
+                this.recordBtn.textContent = '⏹️ 停止錄音';
+                this.recordBtn.style.background = 'linear-gradient(135deg, #dc3545, #c82333)';
+            }
+        } else {
+            this.stopWhisperRecording();
+            this.recordBtn.textContent = '🎤 開始錄音';
+            this.recordBtn.style.background = 'linear-gradient(135deg, #28a745, #20c997)';
+        }
+    }
+    
+    // 原本的Web Speech切換錄音方法
+    toggleWebSpeechRecording() {
+        // 使用原本的toggleRecording邏輯
+        if (!this.isRecording) {
+            this.startRecognition();
+        } else {
+            this.stopRecording();
+        }
+    }
+    
+    // 從現有的onresult邏輯中提取出來的處理方法
+    handleSpeechResult(event) {
+        // 這裡複製原本recognition.onresult中的邏輯
+        // 為了簡化，我們直接調用現有的翻譯流程
+        const transcript = event.results[event.resultIndex][0].transcript;
+        const confidence = event.results[event.resultIndex][0].confidence || 0.9;
+        const isFinal = event.results[event.resultIndex].isFinal;
+        
+        if (isFinal && transcript.trim()) {
+            this.processTranscriptForTranslation(transcript, confidence);
+        }
+    }
+    
+    // 處理轉錄結果進行翻譯的方法
+    async processTranscriptForTranslation(transcript, confidence = 0.9) {
+        if (!transcript || transcript.trim().length < 2) return;
+        
+        try {
+            // 增加字數統計
+            this.totalWordCount += transcript.length;
+            this.updateWordCount();
+            
+            // 添加到歷史記錄
+            this.transcriptHistory.push({
+                id: this.currentTranscriptId++,
+                original: transcript,
+                timestamp: new Date().toLocaleTimeString('zh-TW', { 
+                    hour12: false, 
+                    hour: '2-digit', 
+                    minute: '2-digit', 
+                    second: '2-digit' 
+                }),
+                confidence: confidence
+            });
+            
+            // 翻譯文字
+            await this.translateAndDisplay(transcript);
+            
+        } catch (error) {
+            console.error('處理轉錄結果時發生錯誤:', error);
         }
     }
 }
