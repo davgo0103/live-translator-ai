@@ -50,6 +50,10 @@ class RealTimeTranslator {
         this.wakeLock = null;
         this.translatedTexts = new Set(); // 追蹤已翻譯的文本
         
+        // 簡報模式文本歷史
+        this.presentationOriginalHistory = [];
+        this.presentationTranslatedHistory = [];
+        
         // DOM 元素
         this.elements = {};
         
@@ -809,16 +813,110 @@ class RealTimeTranslator {
 
     // 更新簡報模式的面板
     updatePresentationPanes(originalText, translatedText) {
+        // 只在完整翻譯時添加到歷史記錄（避免累積進行中的狀態）
+        if (originalText && translatedText && 
+            !translatedText.includes('🔄') && 
+            !translatedText.includes('翻譯中') && 
+            !translatedText.includes('等待')) {
+            
+            // 添加到歷史記錄
+            this.presentationOriginalHistory.push(originalText);
+            this.presentationTranslatedHistory.push(translatedText);
+            
+            // 限制歷史記錄長度（保持最近10條記錄）
+            if (this.presentationOriginalHistory.length > 10) {
+                this.presentationOriginalHistory.shift();
+            }
+            if (this.presentationTranslatedHistory.length > 10) {
+                this.presentationTranslatedHistory.shift();
+            }
+        }
+
+        // 更新顯示
+        this.updatePresentationDisplay(originalText, translatedText);
+    }
+
+    // 更新簡報模式顯示
+    updatePresentationDisplay(currentOriginal, currentTranslated) {
         const originalContent = document.getElementById('originalContent');
         const translatedContent = document.getElementById('translatedContent');
         
         if (originalContent) {
-            originalContent.innerHTML = `<div class="text-wrapper">${originalText}</div>`;
+            let displayText = '';
+            
+            // 如果是臨時狀態，顯示當前內容
+            if (currentOriginal && (currentTranslated && 
+                (currentTranslated.includes('🔄') || 
+                 currentTranslated.includes('翻譯中') || 
+                 currentTranslated.includes('等待')))) {
+                displayText = currentOriginal;
+            } else {
+                // 顯示歷史記錄，限制總長度
+                displayText = this.getDisplayTextFromHistory(this.presentationOriginalHistory);
+            }
+            
+            const limitedText = this.limitPresentationText(displayText);
+            originalContent.innerHTML = `<div class="text-wrapper">${limitedText}</div>`;
         }
         
         if (translatedContent) {
-            translatedContent.innerHTML = `<div class="text-wrapper">${translatedText}</div>`;
+            let displayText = '';
+            
+            // 如果是臨時狀態，顯示當前狀態
+            if (currentTranslated && 
+                (currentTranslated.includes('🔄') || 
+                 currentTranslated.includes('翻譯中') || 
+                 currentTranslated.includes('等待'))) {
+                displayText = currentTranslated;
+            } else {
+                // 顯示歷史記錄，限制總長度
+                displayText = this.getDisplayTextFromHistory(this.presentationTranslatedHistory);
+            }
+            
+            const limitedText = this.limitPresentationText(displayText);
+            translatedContent.innerHTML = `<div class="text-wrapper">${limitedText}</div>`;
         }
+    }
+
+    // 從歷史記錄構建顯示文本
+    getDisplayTextFromHistory(history, separator = ' ') {
+        if (!history || history.length === 0) {
+            return '';
+        }
+        
+        return history.join(separator);
+    }
+
+    // 限制簡報模式文字長度，自動清除舊內容
+    limitPresentationText(text, maxLength = 300) {
+        if (!text || text.length <= maxLength) {
+            return text;
+        }
+
+        // 找到合適的切割點（句號、感嘆號、問號）
+        const sentences = text.split(/([。！？.!?])/);
+        let result = '';
+        let currentLength = 0;
+
+        // 從後往前添加句子，直到達到長度限制
+        for (let i = sentences.length - 1; i >= 0; i--) {
+            const sentence = sentences[i];
+            if (currentLength + sentence.length <= maxLength) {
+                result = sentence + result;
+                currentLength += sentence.length;
+            } else {
+                // 如果是第一個句子就超過長度，則截取部分並添加省略號
+                if (result === '') {
+                    result = '...' + sentence.slice(-(maxLength - 3));
+                } else {
+                    // 在開頭添加省略號表示有更多內容
+                    result = '...' + result;
+                }
+                break;
+            }
+        }
+
+        return result || text.slice(-maxLength);
     }
 
     // 檢查是否有活躍的臨時翻譯
@@ -917,10 +1015,17 @@ class RealTimeTranslator {
         this.translatedTexts.clear(); // 清除已翻譯文本追蹤
         this.accumulatedText = ''; // 清除 Whisper 累積文本
         
+        // 清除簡報模式歷史記錄
+        this.presentationOriginalHistory = [];
+        this.presentationTranslatedHistory = [];
+        
         this.updateWordCount(0);
         this.updateCurrentText('📝 記錄已清除，可以重新開始');
         
-        console.log('🗑️ 轉錄記錄和翻譯追蹤已清除');
+        // 清除簡報模式顯示
+        this.updatePresentationDisplay('', '等待語音輸入...');
+        
+        console.log('🗑️ 轉錄記錄、翻譯追蹤和簡報模式歷史已清除');
     }
 
     updateRecordButton(isRecording, text = null) {
