@@ -588,12 +588,17 @@ class RealTimeTranslator {
             const completeSentence = sentenceMatch[0].trim();
             
             // 只有當句子長度足夠且不重複時才進行翻譯
-            if (completeSentence.length >= 3 && !this.isTranslationInProgress(completeSentence)) {
+            if (completeSentence.length >= 3 && 
+                !this.isTranslationInProgress(completeSentence) && 
+                !this.translatedTexts.has(completeSentence)) {
+                
                 console.log(`✅ 完整句子準備翻譯: "${completeSentence}"`);
                 this.processTranscriptForTranslation(completeSentence, 0.9);
                 
                 // 移除已翻譯的部分
                 this.accumulatedText = this.accumulatedText.replace(completeSentence, '').trim();
+            } else {
+                console.log(`跳過句子 (重複或正在翻譯中): "${completeSentence}"`);
             }
         }
 
@@ -601,6 +606,9 @@ class RealTimeTranslator {
         if (!this.hasActiveTemporaryTranslation()) {
             this.updateCurrentText(`📡 ${this.accumulatedText}`);
         }
+
+        // 更新簡報模式顯示
+        this.updatePresentationPanes(this.accumulatedText, '等待完整句子...');
     }
 
     // 檢查是否有相同文本的翻譯正在進行中
@@ -755,6 +763,9 @@ class RealTimeTranslator {
 
             // 顯示翻譯進行中狀態
             this.updateCurrentText(`🔄 翻譯中: ${originalText}`);
+            
+            // 更新簡報模式 - 顯示翻譯進行中
+            this.updatePresentationPanes(originalText, '🔄 翻譯中...');
 
             // 執行翻譯
             const translationResult = await this.translateText(
@@ -825,6 +836,7 @@ class RealTimeTranslator {
             this.elements.currentText.innerHTML = text;
         }
     }
+
 
     updateWordCount(count) {
         if (this.elements.wordCount) {
